@@ -1,0 +1,14 @@
+#+TITLE: SNS Emacs Config
+
+* Overview
+This repo contains my emacs config, and snippets of lisp that I find useful.  It's currently dreadfully out of date, but I'm going to start porting stuff over from various places.
+* Usage
+The simplest way to use this is simply to clone it thus:
+
+#+BEGIN_EXAMPLE
+cd $HOME
+git clone git://github.com/Atalanta/emacs-config.git .emacs.d
+#+END_EXAMPLE
+
+This is currently only tested on Emacs 24 on OSX.
+
