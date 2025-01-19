@@ -1,14 +1,327 @@
 #+TITLE: SNS Emacs Config
+#+AUTHOR: Stephen Nelson-Smith
 
-* Overview
-This repo contains my emacs config, and snippets of lisp that I find useful.  It's currently dreadfully out of date, but I'm going to start porting stuff over from various places.
-* Usage
-The simplest way to use this is simply to clone it thus:
+This is my literate Emacs configuration. Following the principles of literate programming, it is a single file containing both plain language commentary and discussion and executeable code.
+
+This file is the only place that changes to my configuration are made - it's a single source of truth, which results in the creation of a clean, modular Emacs configuration.
+
+* Instructions
+
+Clone to =~/.emacs.d=:
 
 #+BEGIN_EXAMPLE
 cd $HOME
 git clone git://github.com/Atalanta/emacs-config.git .emacs.d
 #+END_EXAMPLE
 
-This is currently only tested on Emacs 24 on OSX.
+Edit this file in Emacs, make changes to the code blocks, and evaluate with =org-babel-tangle=. The code in the code blocks will be tangles to their respective locations, which will be available to an evaluated by Emacs on restart.
 
+* Overview
+
+This file - =README.org= - is the document that generates my Emacs configuration. It is not loaded by Emacs itself, but by me, resulting in the rendered Emacs config on whatever machine the file is "tangled".
+
+There are two top level files and two directories:
+
+- =early-init.el=
+- =init.el=
+- =sns-emacs-modules=
+- =sns-lisp=
+
+* The ~early-init.el~ file
+
+This is the first file that Emacs reads when starting up. It should have no dependencies on external packages, and is design to set up a few fundamental things before advancing to the main ~init.el~ file.
+
+#+begin_src emacs-lisp :tangle "early-init.el"
+  (setq inhibit-startup-message t)
+  (tool-bar-mode -1)
+  (scroll-bar-mode -1)
+  (menu-bar-mode -1)
+  (setq frame-inhibit-implied-resize t)
+#+end_src
+
+* The ~init.el~ file
+
+In some environments I use Nix, so we need to make the Nix profile available to Emacs:
+
+#+begin_src emacs-lisp :tangle "init.el"
+(defun setup-nix-path ()
+  "Add Nix profile to Emacs environment."
+  (let ((nix-bin (expand-file-name ".nix-profile/bin" (getenv "HOME"))))
+    (add-to-list 'exec-path nix-bin)
+    (setenv "PATH" (concat nix-bin ":" (getenv "PATH")))))
+
+(setup-nix-path)
+#+end_src
+
+Emacs has some built-in features to protect users from over-writing files, losing data, and corruption. Some of these are somewhat moot when using Git, and in a single user environment, and can be disabled. Emacs does not automatically save your file as you go, it maintains a cached copy of your latest work, which it updates periodically. In the event that you quit Emacs without saving your work, when you start Emacs, it will offer to recover the most recent cached copy. This is fairly helpful, but by default it keeps these auto-save files in the same directory as your working copy, which is messy, so we configure it to keep the auto-save files in a separate place.
+
+#+begin_src emacs-lisp :tangle "init.el"
+(setq make-backup-files nil)
+
+(setq auto-save-default t)
+(setq auto-save-timeout 20)
+(setq auto-save-interval 200)
+
+(setq auto-save-file-name-transforms '((".*" "~/.emacs.d/auto-save/" t)))
+
+(setq create-lockfiles nil)
+#+end_src
+
+By default, Emacs asks us to confirm some actions, like saving unsaved changes before quitting, by typing yes or no. This setting changes that behaviour so we only need to type y or n instead.
+
+#+begin_src emacs-lisp :tangle "init.el"
+  (fset 'yes-or-no-p 'y-or-n-p)
+#+end_src
+
+Certain behaviours in Emacs result in Emacs noticing what it considers to be "customisations" which it will save in our ~init.el~ file. We will never explicitly customise Emacs outside of version control, so this is just noise. We can prevent this from happening by telling it to write those apparent customisations to a temporary file.
+
+#+begin_src emacs-lisp :tangle "init.el"
+(setq custom-file (make-temp-file "emacs-custom-"))
+#+end_src
+
+Emacs has two commonly used package archives - the GNU Elpa (Emacs Lisp Package Archive), which is 100% GPL software, and Melpa which is larger, and contains software released under non-GNU licence (including Org Roam and Magit).
+
+#+begin_src emacs-lisp :tangle "init.el"
+(setq package-archives
+      '(("gnu-elpa" . "https://elpa.gnu.org/packages/")
+        ("melpa" . "https://melpa.org/packages/")))
+#+end_src
+
+The rest of our configuration is modular. Each module lives in the ~sns-emacs-modules~ directory.
+
+#+begin_src emacs-lisp :tangle "init.el"
+  (mapc
+   (lambda (string)
+     (add-to-list 'load-path (locate-user-emacs-file string)))
+   '("sns-emacs-modules" "sns-lisp"))
+#+end_src
+
+* The ~sns-emacs-modules/~
+
+These are files which install and configure various aspects of the Emacs user experience.
+
+#+begin_src emacs-lisp :tangle "init.el"
+  (require 'sns-look-and-feel)
+  (require 'sns-org-mode)
+  (require 'sns-development-environment)
+  (require 'sns-technical-writing)
+#+end_src
+
+** Look and Feel
+
+Set a pleasant, modern, readable theme.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el" :mkdirp yes
+(use-package ef-themes
+  :ensure t
+  :config
+  (load-theme 'ef-cypress t))
+#+end_src
+
+The default font size is a little small - set it to something a bit bigger. I like the Inconsolata font - this needs to be installed before this will work, so fall back if it isn't.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el" :mkdirp yes
+(if (member "Inconsolata" (font-family-list))
+    (set-face-attribute 'default nil :font "Inconsolata-18")
+  (set-face-attribute 'default nil :family "monospace" :height 180))
+#+end_src
+
+Increase, decrease and reset font size with command +/-/0.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el"
+  (global-set-key (kbd "s-=") (lambda () (interactive) (text-scale-increase 1)))
+  (global-set-key (kbd "s--") (lambda () (interactive) (text-scale-decrease 1)))
+  (global-set-key (kbd "s-0") (lambda () (interactive) (text-scale-set 0)))
+#+end_src
+
+Show line numbers, and highlight where we are in the file, and make the cursor blink.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el"
+  (global-display-line-numbers-mode t)
+  (setq display-line-numbers-type 'normal)
+  (column-number-mode t)
+  (global-hl-line-mode t)
+  (blink-cursor-mode t)
+#+end_src
+
+When Emacs starts up, you can set the size of the "frame" (the window in which Emacs runs). I like to operate in full screen, and have the option to toggle that on and off.
+
+#+begin_src emacs-lisp 
+  (set-frame-parameter nil 'fullscreen 'fullboth)
+  (set-frame-parameter nil 'fullscreen nil)
+  (global-set-key (kbd "C-c f") #'toggle-frame-fullscreen)
+  (add-to-list 'default-frame-alist '(width . 100))
+  (add-to-list 'default-frame-alist '(height . 50))
+#+end_src
+
+Use a modern mini-buffer and navigation framework:
+
+#+begin_src emacs-lisp :tangle "csre-emacs-modules/csre-look-and-feel.el"
+  (use-package vertico
+    :ensure t
+    :init
+    (vertico-mode))
+
+  (use-package vertico-directory
+    :ensure t
+    :after vertico
+    :bind (:map vertico-map
+		("DEL" . vertico-directory-delete-char)
+		("M-DEL" . vertico-directory-delete-word)))
+
+  (use-package marginalia
+    :ensure t
+    :after vertico
+    :init
+    (marginalia-mode))
+#+end_src
+
+** Org Mode
+*** GTD
+I use Org Mode to implement the principles and practices of GTD.
+
+I don't like the default metaphore of "todos", preferring the idea of *outcomes* (which map onto GTD open loops or projects) and *actions*. I consider *follow up* to be a specific kind of action, rather than a context of "waiting for".
+
+#+begin_src emacs-lisp
+(use-package org
+  :ensure nil
+  :bind (("C-c c" . org-capture)
+         ("C-c a" . org-agenda))
+  :hook (org-mode . visual-line-mode)
+  :config
+
+  (require 'org-tempo)
+  (add-to-list 'org-structure-template-alist '("el" . "src emacs-lisp"))
+
+
+  (setq org-todo-keywords '((sequence "OUTCOME" "ACTION" "FU" "|" "DONE"))
+        org-log-done 'time)
+
+  (setq org-agenda-files '("~/journal/journal.org"
+                           "~/journal/gtd.org"
+                           "~/journal/habits.org"
+                           "~/journal/1-1s.org")
+        org-agenda-tag-filter-preset '("-someday"))
+  (add-to-list 'org-modules 'org-habit)
+
+  (defun skip-if-has-action ()
+    "Skip subtrees with a TODO keyword of 'ACTION'."
+    '(org-agenda-skip-subtree-if 'todo '("ACTION")))
+
+  (setq org-agenda-custom-commands
+        '(("a" "Actions" todo "ACTION")
+          ("o" "Outcomes" todo "OUTCOME")
+          ("n" "Outcomes without actions"
+           todo "OUTCOME"
+           ((org-agenda-skip-function (skip-if-has-action))))
+          ("s" "Someday/Maybe"
+           tags-todo "+someday"
+           ((org-agenda-tag-filter-preset nil)))))
+
+  (setq org-default-notes-file "~/journal/gtd.org")
+  (setq open-loop-content
+        "* OUTCOME %?\n:PROPERTIES:\n:CREATED: %U\n:WHY:\n:VALUES:\n:SUCCESS:\n:END:\n")
+  (setq next-action-content
+        "** ACTION %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n")
+
+  (setq org-capture-templates
+        `(("l" "Open Loop" entry
+           (file ,org-default-notes-file)
+           ,open-loop-content)
+          ("n" "Next Action" entry
+           (function
+            (lambda ()
+              (find-file ,org-default-notes-file)
+              (org-goto)))
+           ,next-action-content))))
+#+end_src
+
+** Development Environment
+
+*** Magit
+
+Magit is a very powerful and pleasant to use interface for Git.
+
+#+begin_src emacs-lisp :tangle "csre-emacs-modules/csre-magit.el" :mkdirp yes
+    (use-package magit
+      :ensure t)
+#+end_src
+*** Rust, Golang and Clojure Modes
+
+#+begin_src emacs-lisp
+  (dolist (package '(go-mode rust-mode clojure-mode))
+    (unless (package-installed-p package)
+      (package-refresh-contents)
+      (package-install package)))
+
+  (add-to-list 'auto-mode-alist '("\\.go\\'" . go-mode))
+  (add-to-list 'auto-mode-alist '("\\.rs\\'" . rust-mode))
+  (add-to-list 'auto-mode-alist '("\\.clj\\'" . clojure-mode))
+  (add-to-list 'auto-mode-alist '("\\.cljs\\'" . clojure-mode))
+  (add-to-list 'auto-mode-alist '("\\.edn\\'" . clojure-mode))
+#+end_src
+
+*** Enhanced Editing Support for Lisp
+
+#+begin_src emacs-lisp
+  (dolist (package '(paredit rainbow-delimiters))
+      (unless (package-installed-p package)
+	(package-refresh-contents)
+	(package-install package)))
+
+  (defun better-lisp ()
+      "Enable Paredit and Rainbow Delimiters for Lisp modes."
+      (paredit-mode 1)
+      (rainbow-delimiters-mode 1))
+
+  (dolist (hook '(emacs-lisp-mode-hook
+		    clojure-mode-hook
+		    lisp-mode-hook))
+      (add-hook hook 'better-lisp))
+
+  (add-to-list 'auto-mode-alist '("\\.el\\'" . emacs-lisp-mode))
+#+end_src
+
+*** Cider - a REPL for Clojure
+
+#+begin_src emacs-lisp
+(when (not (package-installed-p 'cider))
+  (package-refresh-contents)
+  (package-install 'cider))
+
+(add-hook 'clojure-mode-hook 'cider-mode)
+#+end_src
+
+** Technical Writing
+
+#+begin_src emacs-lisp
+  (use-package markdown-mode
+    :ensure t
+    :hook (markdown-mode . visual-line-mode))
+#+end_src
+** Emacs Lisp Functions
+*** Change themes cleanly
+#+begin_src emacs-lisp :results table
+  (defun reset-themes-and-load (theme)
+    "Disable all themes and load THEME without altering custom faces."
+    (interactive
+     (list (intern (completing-read "Load theme: " (custom-available-themes)))))
+    (mapc #'disable-theme custom-enabled-themes)
+    (load-theme theme t))
+#+end_src
+*** Create a checkbox
+#+begin_src emacs-lisp
+(defun create-checkbox ()
+  "Turn the current line into a checkbox or remove the checkbox."
+  (interactive)
+  (beginning-of-line)
+  (if (looking-at "^- \\[ \\]")
+      (replace-match "")
+    (insert "- [ ] ")))
+*** Inserting the date
+#+begin_src emacs-lisp
+(defun my-insert-journal-heading ()
+  "Insert a level 2 Org heading with the current date."
+  (interactive)
+  (insert (format "** %s\n" (format-time-string "%A %d %B %Y"))))
+#+end_src
