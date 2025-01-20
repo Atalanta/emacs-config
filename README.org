@@ -14,7 +14,15 @@ cd $HOME
 git clone git://github.com/Atalanta/emacs-config.git .emacs.d
 #+END_EXAMPLE
 
-Edit this file in Emacs, make changes to the code blocks, and evaluate with =org-babel-tangle=. The code in the code blocks will be tangles to their respective locations, which will be available to an evaluated by Emacs on restart.
+Tangle the config:
+
+#+begin_example
+emacs --batch --load org --eval '(org-babel-tangle-file "README.org")'
+#+end_example
+
+If you wish to make changes, open this file in Emacs, update existing or create new code blocks if needed, and evaluate with =org-babel-tangle=. The code in the code blocks will be tangled to their respective locations, which will be available to an evaluated by Emacs on restart.
+
+Note: code blocks will only be tangled if decorated with =:tangle= and the path to the file you wish to write.
 
 * Overview
 
@@ -41,6 +49,9 @@ This is the first file that Emacs reads when starting up. It should have no depe
 
 * The ~init.el~ file
 
+This is the main Emacs config file. This is the place to put global settings which apply across Emacs, but which do not have any impact on startup time. It also imports the modules which make up the wider config.
+
+** Support Nix
 In some environments I use Nix, so we need to make the Nix profile available to Emacs:
 
 #+begin_src emacs-lisp :tangle "init.el"
@@ -53,6 +64,7 @@ In some environments I use Nix, so we need to make the Nix profile available to 
 (setup-nix-path)
 #+end_src
 
+** Simplify auto-save and backup features
 Emacs has some built-in features to protect users from over-writing files, losing data, and corruption. Some of these are somewhat moot when using Git, and in a single user environment, and can be disabled. Emacs does not automatically save your file as you go, it maintains a cached copy of your latest work, which it updates periodically. In the event that you quit Emacs without saving your work, when you start Emacs, it will offer to recover the most recent cached copy. This is fairly helpful, but by default it keeps these auto-save files in the same directory as your working copy, which is messy, so we configure it to keep the auto-save files in a separate place.
 
 #+begin_src emacs-lisp :tangle "init.el"
@@ -67,18 +79,21 @@ Emacs has some built-in features to protect users from over-writing files, losin
 (setq create-lockfiles nil)
 #+end_src
 
+** Allow short yes/no answers
 By default, Emacs asks us to confirm some actions, like saving unsaved changes before quitting, by typing yes or no. This setting changes that behaviour so we only need to type y or n instead.
 
 #+begin_src emacs-lisp :tangle "init.el"
   (fset 'yes-or-no-p 'y-or-n-p)
 #+end_src
 
+** Don't persist "customisations"
 Certain behaviours in Emacs result in Emacs noticing what it considers to be "customisations" which it will save in our ~init.el~ file. We will never explicitly customise Emacs outside of version control, so this is just noise. We can prevent this from happening by telling it to write those apparent customisations to a temporary file.
 
 #+begin_src emacs-lisp :tangle "init.el"
 (setq custom-file (make-temp-file "emacs-custom-"))
 #+end_src
 
+** Set up package archives
 Emacs has two commonly used package archives - the GNU Elpa (Emacs Lisp Package Archive), which is 100% GPL software, and Melpa which is larger, and contains software released under non-GNU licence (including Org Roam and Magit).
 
 #+begin_src emacs-lisp :tangle "init.el"
@@ -87,6 +102,7 @@ Emacs has two commonly used package archives - the GNU Elpa (Emacs Lisp Package 
         ("melpa" . "https://melpa.org/packages/")))
 #+end_src
 
+** Import modules
 The rest of our configuration is modular. Each module lives in the ~sns-emacs-modules~ directory.
 
 #+begin_src emacs-lisp :tangle "init.el"
@@ -109,6 +125,8 @@ These are files which install and configure various aspects of the Emacs user ex
 
 ** Look and Feel
 
+*** Theme
+
 Set a pleasant, modern, readable theme.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el" :mkdirp yes
@@ -118,6 +136,7 @@ Set a pleasant, modern, readable theme.
   (load-theme 'ef-cypress t))
 #+end_src
 
+*** Fonts and font resizing
 The default font size is a little small - set it to something a bit bigger. I like the Inconsolata font - this needs to be installed before this will work, so fall back if it isn't.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el" :mkdirp yes
@@ -125,7 +144,6 @@ The default font size is a little small - set it to something a bit bigger. I li
     (set-face-attribute 'default nil :font "Inconsolata-18")
   (set-face-attribute 'default nil :family "monospace" :height 180))
 #+end_src
-
 Increase, decrease and reset font size with command +/-/0.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el"
@@ -134,6 +152,7 @@ Increase, decrease and reset font size with command +/-/0.
   (global-set-key (kbd "s-0") (lambda () (interactive) (text-scale-set 0)))
 #+end_src
 
+*** General display and navigation
 Show line numbers, and highlight where we are in the file, and make the cursor blink.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el"
@@ -144,9 +163,10 @@ Show line numbers, and highlight where we are in the file, and make the cursor b
   (blink-cursor-mode t)
 #+end_src
 
+*** Run in fullscreen by default
 When Emacs starts up, you can set the size of the "frame" (the window in which Emacs runs). I like to operate in full screen, and have the option to toggle that on and off.
 
-#+begin_src emacs-lisp 
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el"
   (set-frame-parameter nil 'fullscreen 'fullboth)
   (set-frame-parameter nil 'fullscreen nil)
   (global-set-key (kbd "C-c f") #'toggle-frame-fullscreen)
@@ -154,9 +174,10 @@ When Emacs starts up, you can set the size of the "frame" (the window in which E
   (add-to-list 'default-frame-alist '(height . 50))
 #+end_src
 
+*** Minibuffer and navigation
 Use a modern mini-buffer and navigation framework:
 
-#+begin_src emacs-lisp :tangle "csre-emacs-modules/csre-look-and-feel.el"
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el"
   (use-package vertico
     :ensure t
     :init
@@ -182,7 +203,7 @@ I use Org Mode to implement the principles and practices of GTD.
 
 I don't like the default metaphore of "todos", preferring the idea of *outcomes* (which map onto GTD open loops or projects) and *actions*. I consider *follow up* to be a specific kind of action, rather than a context of "waiting for".
 
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
 (use-package org
   :ensure nil
   :bind (("C-c c" . org-capture)
@@ -238,17 +259,19 @@ I don't like the default metaphore of "todos", preferring the idea of *outcomes*
 
 ** Development Environment
 
+I use Emacs as my primary development environment - this sets up langauge support and tooling for the languages I use most.
+
 *** Magit
 
 Magit is a very powerful and pleasant to use interface for Git.
 
-#+begin_src emacs-lisp :tangle "csre-emacs-modules/csre-magit.el" :mkdirp yes
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
     (use-package magit
       :ensure t)
 #+end_src
 *** Rust, Golang and Clojure Modes
 
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
   (dolist (package '(go-mode rust-mode clojure-mode))
     (unless (package-installed-p package)
       (package-refresh-contents)
@@ -262,8 +285,8 @@ Magit is a very powerful and pleasant to use interface for Git.
 #+end_src
 
 *** Enhanced Editing Support for Lisp
-
-#+begin_src emacs-lisp
+ 
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
   (dolist (package '(paredit rainbow-delimiters))
       (unless (package-installed-p package)
 	(package-refresh-contents)
@@ -284,7 +307,7 @@ Magit is a very powerful and pleasant to use interface for Git.
 
 *** Cider - a REPL for Clojure
 
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp:tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
 (when (not (package-installed-p 'cider))
   (package-refresh-contents)
   (package-install 'cider))
@@ -300,8 +323,9 @@ Magit is a very powerful and pleasant to use interface for Git.
     :hook (markdown-mode . visual-line-mode))
 #+end_src
 ** Emacs Lisp Functions
+This is where I keep handy functions that I have written or come across.
 *** Change themes cleanly
-#+begin_src emacs-lisp :results table
+#+begin_src emacs-lisp :tangle "sns-lisp/sns-functions.el" :mkdirp yes
   (defun reset-themes-and-load (theme)
     "Disable all themes and load THEME without altering custom faces."
     (interactive
@@ -310,7 +334,7 @@ Magit is a very powerful and pleasant to use interface for Git.
     (load-theme theme t))
 #+end_src
 *** Create a checkbox
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle "sns-lisp/sns-functions.el" :mkdirp yes
 (defun create-checkbox ()
   "Turn the current line into a checkbox or remove the checkbox."
   (interactive)
@@ -319,8 +343,8 @@ Magit is a very powerful and pleasant to use interface for Git.
       (replace-match "")
     (insert "- [ ] ")))
 *** Inserting the date
-#+begin_src emacs-lisp
-(defun my-insert-journal-heading ()
+#+begin_src emacs-lisp :tangle "sns-lisp/sns-functions.el" :mkdirp yes
+(defun insert-journal-heading ()
   "Insert a level 2 Org heading with the current date."
   (interactive)
   (insert (format "** %s\n" (format-time-string "%A %d %B %Y"))))
