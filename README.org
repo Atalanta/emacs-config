@@ -203,48 +203,65 @@ Use a modern mini-buffer and navigation framework:
 (provide 'sns-look-and-feel)
 #+end_src
 ** Org Mode
+I use Org Mode as the cockpit of my life - I maintain my work and personal journals, any writing projects, and this literate config using Org Mode. I also use Org Mode for managing my ongoing commitments, both personally and professionally.
+
+*** Basic setup
+
+I use the common community bindings for capture and agenda. Visual line mode ensures that long lines wrap on the screen, at word boundaries. 
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
+  (use-package org
+    :ensure nil
+    :bind (("C-c c" . org-capture)
+	   ("C-c a" . org-agenda))
+    :hook (org-mode . visual-line-mode)
+    :config
+    (setup-templates)
+    (setup-gtd-flow)
+    (setup-agenda-files)
+#+end_src
+
+*** Templates
+
+Org Tempo provides short cuts and templates for creating blocks. I use an Emacs Lisp template, since I frequently write Lisp in Org Mode, either for experimentation purposes, or as part of this config.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
+  (defun setup-templates ()
+    (require 'org-tempo)
+    (add-to-list 'org-structure-template-alist '("el" . "src emacs-lisp"))
+#+end_src
+
 *** GTD
 I use Org Mode to implement the principles and practices of GTD.
 
-I don't like the default metaphore of "todos", preferring the idea of *outcomes* (which map onto GTD open loops or projects) and *actions*. I consider *follow up* to be a specific kind of action, rather than a context of "waiting for".
+**** Workflow
+I don't like the default metaphore of "todos", preferring the idea of *outcomes* (which map onto GTD open loops or projects) and *actions*. I consider *follow up* to be a specific kind of action, rather than a context of "waiting for". I also log the time at which a task enters the completion state, for future records/analysis.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
-(use-package org
-  :ensure nil
-  :bind (("C-c c" . org-capture)
-         ("C-c a" . org-agenda))
-  :hook (org-mode . visual-line-mode)
-  :config
+  (defun setup-gtd-flow ()
+    (setq org-todo-keywords '((sequence "OUTCOME" "ACTION" "FU" "|" "DONE"))
+        org-log-done 'time))
+#+end_src
 
-  (require 'org-tempo)
-  (add-to-list 'org-structure-template-alist '("el" . "src emacs-lisp"))
+**** Habits
 
+I'm experimenting with using Org Habit to keep on top of things I need to do regularly.
 
-  (setq org-todo-keywords '((sequence "OUTCOME" "ACTION" "FU" "|" "DONE"))
-        org-log-done 'time)
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
+(add-to-list 'org-modules 'org-habit) 
+#+end_src
 
-  (setq org-agenda-files '("~/journal/journal.org"
-                           "~/journal/gtd.org"
-                           "~/journal/habits.org"
-                           "~/journal/1-1s.org")
-        org-agenda-tag-filter-preset '("-someday"))
-  (add-to-list 'org-modules 'org-habit)
+**** Capture
 
-  (defun skip-if-has-action ()
-    "Skip subtrees with a TODO keyword of 'ACTION'."
-    '(org-agenda-skip-subtree-if 'todo '("ACTION")))
+I keep all my GTD projects and actions in a single file:
 
-  (setq org-agenda-custom-commands
-        '(("a" "Actions" todo "ACTION")
-          ("o" "Outcomes" todo "OUTCOME")
-          ("n" "Outcomes without actions"
-           todo "OUTCOME"
-           ((org-agenda-skip-function (skip-if-has-action))))
-          ("s" "Someday/Maybe"
-           tags-todo "+someday"
-           ((org-agenda-tag-filter-preset nil)))))
-
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
   (setq org-default-notes-file "~/journal/gtd.org")
+#+end_src
+
+I use two capture templates, one for *action* and one for *outcome*:
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
   (setq open-loop-content
         "* OUTCOME %?\n:PROPERTIES:\n:CREATED: %U\n:WHY:\n:VALUES:\n:SUCCESS:\n:END:\n")
   (setq next-action-content
@@ -261,6 +278,64 @@ I don't like the default metaphore of "todos", preferring the idea of *outcomes*
               (org-goto)))
            ,next-action-content))))
 #+end_src
+
+**** Agenda
+I have a few agenda files:
+
+- =journal.org= - this is my daily journal of notes and thoughts.
+- =gtd.org= - this is where the list of outcomes and actions belong.
+- =habits.org= - [experimental] a place to track habits I wish to develop.
+- =1-1s.org= - my schedule of 1:1 meetings and skip level meetings.
+
+These all live in a single, private Git repo, for backup, versioning, and portablity.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
+  (defun setup-agenda-files ()
+  "Set up Org agenda files and configure default tag filters."
+  (setq org-agenda-files '("~/journal/journal.org"
+                           "~/journal/gtd.org"
+                           "~/journal/habits.org"
+                           "~/journal/1-1s.org")))
+#+end_src
+
+I have two main views I use daily:
+
+- Actions - what next physical actions could I do that would move a project forwards
+- Outcomes - what projects do I have on my radar
+
+And for weekly review purposes I also have:
+
+- Outcomes without actions - are there any projects for which I have not yet agreed a next action?
+- Someday/Maybe - projects I might like to do, but to which I have no current commitment
+
+To facilitate these views, I have a helper function that detects if an outcome has an action
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
+(defun skip-if-has-action ()
+  "Skip subtrees with a TODO keyword of 'ACTION'."
+  '(org-agenda-skip-subtree-if 'todo '("ACTION")))
+#+end_src
+
+And I filter out by default any headlines with the tag =someday=
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
+  (setq org-agenda-tag-filter-preset '("-someday")) 
+#+end_src
+
+The custom commands:
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
+  (setq org-agenda-custom-commands
+        '(("a" "Actions" todo "ACTION")
+          ("o" "Outcomes" todo "OUTCOME")
+          ("n" "Outcomes without actions"
+           todo "OUTCOME"
+           ((org-agenda-skip-function (skip-if-has-action))))
+          ("s" "Someday/Maybe"
+           tags-todo "+someday"
+           ((org-agenda-tag-filter-preset nil)))))
+#+end_src
+
 *** Make available
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
