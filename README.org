@@ -20,6 +20,8 @@ Tangle the config:
 emacs --batch --load org --eval '(org-babel-tangle-file "README.org")'
 #+end_example
 
+When you first open Emacs, there will be a delay while the packages are downloaded and compiled.
+
 If you wish to make changes, open this file in Emacs, update existing or create new code blocks if needed, and evaluate with =org-babel-tangle=. The code in the code blocks will be tangled to their respective locations, which will be available to an evaluated by Emacs on restart.
 
 Note: code blocks will only be tangled if decorated with =:tangle= and the path to the file you wish to write.
@@ -73,7 +75,7 @@ Emacs has some built-in features to protect users from over-writing files, losin
 (setq auto-save-default t)
 (setq auto-save-timeout 20)
 (setq auto-save-interval 200)
-
+(make-directory "~/.emacs.d/auto-save/" t)
 (setq auto-save-file-name-transforms '((".*" "~/.emacs.d/auto-save/" t)))
 
 (setq create-lockfiles nil)
@@ -331,13 +333,14 @@ Magit is a very powerful and pleasant to use interface for Git.
 (provide 'sns-development-environment)
 #+end_src
 ** Technical Writing
-
+*** Markdown
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-technical-writing.el"
   (use-package markdown-mode
     :ensure t
     :hook (markdown-mode . visual-line-mode))
 #+end_src
 
+*** Make available
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-technical-writing.el"
 (provide 'sns-technical-writing)
 #+end_src
@@ -375,8 +378,9 @@ This is where I keep handy functions that I have written or come across.
   (interactive)
   (insert (format "** %s\n" (format-time-string "%A %d %B %Y"))))
 #+end_src
+
 *** Make available
 
 #+begin_src emacs-lisp :tangle "sns-lisp/sns-functions.el" :mkdirp yes
-(provide 'sns-functions.el)
+(provide 'sns-functions)
 #+end_src
