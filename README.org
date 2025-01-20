@@ -261,6 +261,10 @@ I don't like the default metaphore of "todos", preferring the idea of *outcomes*
 
 I use Emacs as my primary development environment - this sets up langauge support and tooling for the languages I use most.
 
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
+(show-paren-mode t)
+#+end_src
+
 *** Magit
 
 Magit is a very powerful and pleasant to use interface for Git.
