@@ -338,7 +338,7 @@ This is where I keep handy functions that I have written or come across.
     (load-theme theme t))
 #+end_src
 *** Create a checkbox
-#+begin_src emacs-lisp :tangle "sns-lisp/sns-functions.el" :mkdirp yes
+#+begin_src emacs-lisp
 (defun create-checkbox ()
   "Turn the current line into a checkbox or remove the checkbox."
   (interactive)
@@ -346,6 +346,8 @@ This is where I keep handy functions that I have written or come across.
   (if (looking-at "^- \\[ \\]")
       (replace-match "")
     (insert "- [ ] ")))
+#+end_src
+
 *** Inserting the date
 #+begin_src emacs-lisp :tangle "sns-lisp/sns-functions.el" :mkdirp yes
 (defun insert-journal-heading ()
