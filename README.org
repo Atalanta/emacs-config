@@ -170,8 +170,6 @@ When Emacs starts up, you can set the size of the "frame" (the window in which E
   (set-frame-parameter nil 'fullscreen 'fullboth)
   (set-frame-parameter nil 'fullscreen nil)
   (global-set-key (kbd "C-c f") #'toggle-frame-fullscreen)
-  (add-to-list 'default-frame-alist '(width . 100))
-  (add-to-list 'default-frame-alist '(height . 50))
 #+end_src
 
 *** Minibuffer and navigation
@@ -197,6 +195,11 @@ Use a modern mini-buffer and navigation framework:
     (marginalia-mode))
 #+end_src
 
+*** Make available
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el"
+(provide 'sns-look-and-feel)
+#+end_src
 ** Org Mode
 *** GTD
 I use Org Mode to implement the principles and practices of GTD.
@@ -256,7 +259,11 @@ I don't like the default metaphore of "todos", preferring the idea of *outcomes*
               (org-goto)))
            ,next-action-content))))
 #+end_src
+*** Make available
 
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
+(provide 'sns-org-mode)
+#+end_src
 ** Development Environment
 
 I use Emacs as my primary development environment - this sets up langauge support and tooling for the languages I use most.
@@ -318,16 +325,29 @@ Magit is a very powerful and pleasant to use interface for Git.
 
 (add-hook 'clojure-mode-hook 'cider-mode)
 #+end_src
+*** Make available
 
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el"
+(provide 'sns-development-environment)
+#+end_src
 ** Technical Writing
 
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-technical-writing.el"
   (use-package markdown-mode
     :ensure t
     :hook (markdown-mode . visual-line-mode))
 #+end_src
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-technical-writing.el"
+(provide 'sns-technical-writing)
+#+end_src
 ** Emacs Lisp Functions
 This is where I keep handy functions that I have written or come across.
+
+#+begin_src emacs-lisp :tangle "init.el"
+  (require 'sns-functions)
+#+end_src
+
 *** Change themes cleanly
 #+begin_src emacs-lisp :tangle "sns-lisp/sns-functions.el" :mkdirp yes
   (defun reset-themes-and-load (theme)
@@ -338,7 +358,7 @@ This is where I keep handy functions that I have written or come across.
     (load-theme theme t))
 #+end_src
 *** Create a checkbox
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle "sns-lisp/sns-functions.el" :mkdirp yes
 (defun create-checkbox ()
   "Turn the current line into a checkbox or remove the checkbox."
   (interactive)
@@ -354,4 +374,9 @@ This is where I keep handy functions that I have written or come across.
   "Insert a level 2 Org heading with the current date."
   (interactive)
   (insert (format "** %s\n" (format-time-string "%A %d %B %Y"))))
+#+end_src
+*** Make available
+
+#+begin_src emacs-lisp :tangle "sns-lisp/sns-functions.el" :mkdirp yes
+(provide 'sns-functions.el)
 #+end_src

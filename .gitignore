@@ -2,3 +2,13 @@
 *~
 \#*\#
 .\#*
+
+# Generated config
+init.el
+early-init.el
+sns-emacs-modules/
+sns-lisp/
+
+# ELPA
+
+elpa/
