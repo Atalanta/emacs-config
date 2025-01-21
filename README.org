@@ -205,25 +205,6 @@ Use a modern mini-buffer and navigation framework:
 ** Org Mode
 I use Org Mode as the cockpit of my life - I maintain my work and personal journals, any writing projects, and this literate config using Org Mode. I also use Org Mode for managing my ongoing commitments, both personally and professionally.
 
-*** Basic setup
-
-I use the common community bindings for capture and agenda. Visual line mode ensures that long lines wrap on the screen, at word boundaries. 
-
-#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
-  (use-package org
-    :ensure nil
-    :bind (("C-c c" . org-capture)
-	   ("C-c a" . org-agenda))
-    :hook (org-mode . visual-line-mode)
-    :config
-    (setup-structure-templates)
-    (setup-gtd-flow)
-    (setup-agenda-files)
-    (template-content)
-    (setup-capture-templates)
-    )
-#+end_src
-
 *** Templates
 
 Org Tempo provides short cuts and templates for creating blocks. I use an Emacs Lisp template, since I frequently write Lisp in Org Mode, either for experimentation purposes, or as part of this config.
@@ -231,7 +212,7 @@ Org Tempo provides short cuts and templates for creating blocks. I use an Emacs 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
   (defun setup-structure-templates ()
     (require 'org-tempo)
-    (add-to-list 'org-structure-template-alist '("el" . "src emacs-lisp"))
+    (add-to-list 'org-structure-template-alist '("el" . "src emacs-lisp")))
 #+end_src
 
 *** GTD
@@ -243,7 +224,7 @@ I don't like the default metaphore of "todos", preferring the idea of *outcomes*
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
   (defun setup-gtd-flow ()
     (setq org-todo-keywords '((sequence "OUTCOME" "ACTION" "FU" "|" "DONE"))
-        org-log-done 'time))
+	  org-log-done 'time))
 #+end_src
 
 **** Capture
@@ -257,24 +238,34 @@ I keep all my GTD projects and actions in a single file:
 I use two capture templates, one for *action* and one for *outcome*:
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
-  (defun template-content ()
-    (setq open-loop-content
-	  "* OUTCOME %?\n:PROPERTIES:\n:CREATED: %U\n:WHY:\n:VALUES:\n:SUCCESS:\n:END:\n")
-    (setq next-action-content
-	"** ACTION %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n"))
+    (defvar sns-open-loop-content
+      "* OUTCOME %?\n:PROPERTIES:\n:CREATED: %U\n:WHY:\n:VALUES:\n:SUCCESS:\n:END:\n")
+    (defvar sns-next-action-content
+      "** ACTION %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n")
+    (defun template-content ()
+      (setq open-loop-content sns-open-loop-content
+	    next-action-content sns-next-action-content))
+#+end_src
+
+The action template requires that I navigate to the outcome under which I want to put the action, so we have a function to set that location.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
+  (defun org-capture-next-action-location ()
+    "Open the default notes file and move cursor to the desired parent heading for the next action."
+    (find-file org-default-notes-file)
+    (org-goto))
 #+end_src
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
-  (defun setup-capture-templates () (setq org-capture-templates
+  (defun setup-capture-templates ()
+    "Configure org capture templates for GTD workflow."
+    (setq org-capture-templates
 	 `(("l" "Open Loop" entry
 	    (file ,org-default-notes-file)
 	    ,open-loop-content)
 	   ("n" "Next Action" entry
-	    (function
-	     (lambda ()
-	       (find-file ,org-default-notes-file)
-	       (org-goto)))
-	    ,next-action-content)))))
+	    (function org-capture-next-action-location)
+	    ,next-action-content))))
 #+end_src
 
 **** Agenda
@@ -289,7 +280,7 @@ These all live in a single, private Git repo, for backup, versioning, and portab
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
   (defun setup-agenda-files ()
-  "Set up Org agenda files and configure default tag filters."
+  "Set up Org agenda files."
   (setq org-agenda-files '("~/journal/journal.org"
                            "~/journal/gtd.org"
                            "~/journal/habits.org"
@@ -311,7 +302,7 @@ To facilitate these views, I have a helper function that detects if an outcome h
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
 (defun skip-if-has-action ()
   "Skip subtrees with a TODO keyword of 'ACTION'."
-  '(org-agenda-skip-subtree-if 'todo '("ACTION")))
+  (org-agenda-skip-subtree-if 'todo '("ACTION")))
 #+end_src
 
 And I filter out by default any headlines with the tag =someday=
@@ -328,7 +319,7 @@ The custom commands:
           ("o" "Outcomes" todo "OUTCOME")
           ("n" "Outcomes without actions"
            todo "OUTCOME"
-           ((org-agenda-skip-function (skip-if-has-action))))
+           ((org-agenda-skip-function #'skip-if-has-action)))
           ("s" "Someday/Maybe"
            tags-todo "+someday"
            ((org-agenda-tag-filter-preset nil)))))
@@ -339,7 +330,30 @@ The custom commands:
 I'm experimenting with using Org Habit to keep on top of things I need to do regularly.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
-(add-to-list 'org-modules 'org-habit) 
+(defun setup-org-habit ()
+  "Setup org-habit module and ensure it's loaded."
+  (require 'org-habit)
+  (setq org-modules (append org-modules '(org-habit))))
+#+end_src
+
+*** Bring it all together 
+
+I use the common community bindings for capture and agenda. Visual line mode ensures that long lines wrap on the screen, at word boundaries. 
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
+  (use-package org
+    :ensure nil
+    :bind (("C-c c" . org-capture)
+	   ("C-c a" . org-agenda))
+    :hook (org-mode . visual-line-mode)
+    :config
+    (setup-structure-templates)
+    (setup-gtd-flow)
+    (setup-agenda-files)
+    (template-content)
+    (setup-capture-templates)
+    (setup-org-habit)
+    )
 #+end_src
 
 *** Make available
