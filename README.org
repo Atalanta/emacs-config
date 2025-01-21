@@ -216,9 +216,12 @@ I use the common community bindings for capture and agenda. Visual line mode ens
 	   ("C-c a" . org-agenda))
     :hook (org-mode . visual-line-mode)
     :config
-    (setup-templates)
+    (setup-structure-templates)
     (setup-gtd-flow)
     (setup-agenda-files)
+    (template-content)
+    (setup-capture-templates)
+    )
 #+end_src
 
 *** Templates
@@ -226,7 +229,7 @@ I use the common community bindings for capture and agenda. Visual line mode ens
 Org Tempo provides short cuts and templates for creating blocks. I use an Emacs Lisp template, since I frequently write Lisp in Org Mode, either for experimentation purposes, or as part of this config.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
-  (defun setup-templates ()
+  (defun setup-structure-templates ()
     (require 'org-tempo)
     (add-to-list 'org-structure-template-alist '("el" . "src emacs-lisp"))
 #+end_src
@@ -243,14 +246,6 @@ I don't like the default metaphore of "todos", preferring the idea of *outcomes*
         org-log-done 'time))
 #+end_src
 
-**** Habits
-
-I'm experimenting with using Org Habit to keep on top of things I need to do regularly.
-
-#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
-(add-to-list 'org-modules 'org-habit) 
-#+end_src
-
 **** Capture
 
 I keep all my GTD projects and actions in a single file:
@@ -262,21 +257,24 @@ I keep all my GTD projects and actions in a single file:
 I use two capture templates, one for *action* and one for *outcome*:
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
-  (setq open-loop-content
-        "* OUTCOME %?\n:PROPERTIES:\n:CREATED: %U\n:WHY:\n:VALUES:\n:SUCCESS:\n:END:\n")
-  (setq next-action-content
-        "** ACTION %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n")
+  (defun template-content ()
+    (setq open-loop-content
+	  "* OUTCOME %?\n:PROPERTIES:\n:CREATED: %U\n:WHY:\n:VALUES:\n:SUCCESS:\n:END:\n")
+    (setq next-action-content
+	"** ACTION %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n"))
+#+end_src
 
-  (setq org-capture-templates
-        `(("l" "Open Loop" entry
-           (file ,org-default-notes-file)
-           ,open-loop-content)
-          ("n" "Next Action" entry
-           (function
-            (lambda ()
-              (find-file ,org-default-notes-file)
-              (org-goto)))
-           ,next-action-content))))
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
+  (defun setup-capture-templates () (setq org-capture-templates
+	 `(("l" "Open Loop" entry
+	    (file ,org-default-notes-file)
+	    ,open-loop-content)
+	   ("n" "Next Action" entry
+	    (function
+	     (lambda ()
+	       (find-file ,org-default-notes-file)
+	       (org-goto)))
+	    ,next-action-content)))))
 #+end_src
 
 **** Agenda
@@ -336,6 +334,14 @@ The custom commands:
            ((org-agenda-tag-filter-preset nil)))))
 #+end_src
 
+**** Habits
+
+I'm experimenting with using Org Habit to keep on top of things I need to do regularly.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
+(add-to-list 'org-modules 'org-habit) 
+#+end_src
+
 *** Make available
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
@@ -357,6 +363,26 @@ Magit is a very powerful and pleasant to use interface for Git.
     (use-package magit
       :ensure t)
 #+end_src
+*** HCL
+We need to be able to hack on HCL, even though it is nasty.
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
+    (use-package hcl-mode
+      :ensure t)
+#+end_src
+
+#+RESULTS:
+
+*** Containers
+
+Docker is a thing.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
+  (use-package dockerfile-mode
+    :ensure t)
+#+end_src
+
+#+RESULTS:
+
 *** Rust, Golang and Clojure Modes
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
@@ -448,12 +474,30 @@ This is where I keep handy functions that I have written or come across.
 
 *** Inserting the date
 #+begin_src emacs-lisp :tangle "sns-lisp/sns-functions.el" :mkdirp yes
-(defun insert-journal-heading ()
+(defun sns-insert-journal-heading ()
   "Insert a level 2 Org heading with the current date."
   (interactive)
   (insert (format "** %s\n" (format-time-string "%A %d %B %Y"))))
 #+end_src
-
+*** Rename file and buffer
+#+begin_src emacs-lisp :tangle "sns-lisp/sns-functions.el" :mkdirp yes
+  (defun sns-rename-file-and-buffer ()
+    "Rename the file visited by the current buffer and update the buffer to visit the renamed file.
+  Prompts for a new name and handles version-controlled files appropriately. If the buffer is not
+  visiting a file, signals an error. Ensures the buffer is updated after renaming."
+    (interactive)
+    (let ((filename (buffer-file-name)))
+      (unless (and filename (file-exists-p filename))
+	(user-error "Buffer is not visiting a file"))
+      (let ((new-name (read-file-name "New name: " filename)))
+	(if (vc-backend filename)
+	    ;; Use version control rename if the file is under version control.
+	    (vc-rename-file filename new-name)
+	  ;; Rename file normally and update buffer.
+	  (progn
+	    (rename-file filename new-name t)
+	    (set-visited-file-name new-name t t))))))
+#+end_src
 *** Make available
 
 #+begin_src emacs-lisp :tangle "sns-lisp/sns-functions.el" :mkdirp yes
