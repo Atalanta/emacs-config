@@ -66,6 +66,29 @@ In some environments I use Nix, so we need to make the Nix profile available to 
 (setup-nix-path)
 #+end_src
 
+** Ensure shell environment variables are available
+
+Some important environment variables like PATH are not inherited by Emacs when launched from the GUI on macOS. This package grabs those from the shell so Emacs can find tools like Git, Ruby, etc.
+
+
+#+begin_src emacs-lisp :tangle "init.el"
+(use-package exec-path-from-shell
+  :ensure t
+  :config
+  (exec-path-from-shell-initialize))
+#+end_src
+
+** Ensure Emacs uses the right shell
+
+Getting OSX to tolerate a different shell on my work machine where I have pseudo-root is a bit of a hack. This ensures that vterm and other shell buffers give me the shell I want.
+
+#+begin_src emacs-lisp :tangle "init.el"
+  (setq shell-file-name "/usr/local/bin/fuck-off-osx-i-want-gnu-bash")
+  (setq explicit-shell-file-name shell-file-name)
+  (with-eval-after-load 'vterm
+    (setq vterm-shell shell-file-name))
+#+end_src
+
 ** Simplify auto-save and backup features
 Emacs has some built-in features to protect users from over-writing files, losing data, and corruption. Some of these are somewhat moot when using Git, and in a single user environment, and can be disabled. Emacs does not automatically save your file as you go, it maintains a cached copy of your latest work, which it updates periodically. In the event that you quit Emacs without saving your work, when you start Emacs, it will offer to recover the most recent cached copy. This is fairly helpful, but by default it keeps these auto-save files in the same directory as your working copy, which is messy, so we configure it to keep the auto-save files in a separate place.
 
@@ -94,6 +117,16 @@ Certain behaviours in Emacs result in Emacs noticing what it considers to be "cu
 #+begin_src emacs-lisp :tangle "init.el"
 (setq custom-file (make-temp-file "emacs-custom-"))
 #+end_src
+
+** Un-disable region-based up/downcase
+
+Changing the case of a region is disabled by default, to avoid confusion. I don't want that behaviour.
+
+#+begin_src emacs-lisp :tangle "init.el"
+(put 'upcase-region 'disabled nil)
+(put 'downcase-region 'disabled nil)
+#+end_src
+
 
 ** Set up package archives
 Emacs has two commonly used package archives - the GNU Elpa (Emacs Lisp Package Archive), which is 100% GPL software, and Melpa which is larger, and contains software released under non-GNU licence (including Org Roam and Magit).
@@ -165,6 +198,22 @@ Show line numbers, and highlight where we are in the file, and make the cursor b
   (blink-cursor-mode t)
 #+end_src
 
+*** Some buffers should not have line numbers
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el"
+(dolist (mode '(help-mode
+                helpful-mode
+                messages-buffer-mode
+                eshell-mode
+                shell-mode
+                term-mode
+                vterm-mode
+                cider-repl-mode
+                completion-list-mode))
+  (add-hook (intern (concat (symbol-name mode) "-hook"))
+            (lambda () (display-line-numbers-mode 0))))
+#+end_src
+
 *** Run in fullscreen by default
 When Emacs starts up, you can set the size of the "frame" (the window in which Emacs runs). I like to operate in full screen, and have the option to toggle that on and off.
 
@@ -195,6 +244,11 @@ Use a modern mini-buffer and navigation framework:
     :after vertico
     :init
     (marginalia-mode))
+
+  (use-package orderless
+    :ensure t
+    :config
+    (setq completion-styles '(orderless)))
 #+end_src
 
 *** Make available
@@ -324,7 +378,6 @@ The custom commands:
            tags-todo "+someday"
            ((org-agenda-tag-filter-preset nil)))))
 #+end_src
-
 **** Habits
 
 I'm experimenting with using Org Habit to keep on top of things I need to do regularly.
@@ -356,6 +409,16 @@ I use the common community bindings for capture and agenda. Visual line mode ens
     )
 #+end_src
 
+*** Arbitrary Queries
+=org-ql= is a powerful query language for Org files - I'm experimenting with it - it could end up replacing some of my agenda views.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
+  (use-package org-ql
+    :ensure t
+    :config
+    (setq org-ql-search-directories (org-agenda-files)))
+#+end_src
+
 *** Make available
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
@@ -363,10 +426,84 @@ I use the common community bindings for capture and agenda. Visual line mode ens
 #+end_src
 ** Development Environment
 
-I use Emacs as my primary development environment - this sets up langauge support and tooling for the languages I use most.
+I use Emacs as my primary development environment - this sets up language support and tooling for the languages I use most.
+
+*** Lisp
+
+Naturally as an Emacs user, one of the most common  languages I work in is Emacs Lisp. I also use Clojure extensively.
+
+Both benefit from augmented paren support:
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
-(show-paren-mode t)
+  (show-paren-mode t)
+
+  (use-package paredit
+    :ensure t
+    :hook ((emacs-lisp-mode
+	    clojure-mode
+	    lisp-mode) . paredit-mode))
+
+  (use-package rainbow-delimiters
+    :ensure t
+    :hook ((emacs-lisp-mode
+	    clojure-mode
+	    lisp-mode) . rainbow-delimiters-mode))
+#+end_src
+
+**** Clojure
+
+Clojure is one of my main languages. Emacs has superb support for Clojure, and is one argument for using it as my editor of choice.
+
+We install Clojure mode, and associate it with Clojure, Clojurescript and EDN files.
+
+I like to use Speclj for BDD, so we need to update the mode to understand that the BDD words are actually functions.
+
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
+  (use-package clojure-mode
+    :ensure t
+    :mode (("\\.clj\\'" . clojure-mode)
+	   ("\\.cljs\\'" . clojure-mode)
+	   ("\\.edn\\'" . clojure-mode))
+    :config
+  (setq clojure-indent-style 'always-align
+        clojure-align-forms-automatically t
+        indent-tabs-mode nil)
+  (put 'describe 'clojure-indent-function 'defun)
+  (put 'context  'clojure-indent-function 'defun)
+  (put 'it       'clojure-indent-function 'defun))
+#+end_src
+
+Cider is the leading REPL, against which all others are compared:
+
+#+begin_src emacs-lisp:tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
+(use-package cider
+  :ensure t
+  :hook (clojure-mode . cider-mode))
+#+end_src
+
+LSP (Language Server Protocol) gives Emacs modern IDE functionality for refactoring, documentation, and error finding.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
+  (use-package lsp-mode
+    :ensure t
+    :hook ((clojure-mode . lsp)
+	   (clojurescript-mode . lsp))
+    :commands lsp)
+
+  (use-package lsp-ui
+  :ensure t)
+#+end_src
+
+Treesitter gives fast, accurate syntax parsing, offering flawless syntax highlighting, structural navigation, and context-aware editing features.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
+(use-package tree-sitter
+  :ensure t
+  :hook (clojure-mode . tree-sitter-mode))
+
+(use-package tree-sitter-langs
+  :ensure t)
 #+end_src
 
 *** Magit
@@ -377,14 +514,27 @@ Magit is a very powerful and pleasant to use interface for Git.
     (use-package magit
       :ensure t)
 #+end_src
+
+*** Nix
+#+begin_src emacs-lisp
+  (use-package nix-mode
+    :ensure t
+    :mode "\\.nix\\'")
+
+  (use-package ob-nix
+    :ensure t)
+
+  (setq org-src-lang-modes
+	(append org-src-lang-modes '(("nix" . nix))))
+#+end_src
+
 *** HCL
 We need to be able to hack on HCL, even though it is nasty.
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
-    (use-package hcl-mode
-      :ensure t)
+      (use-package hcl-mode
+	:ensure t
+	:mode ("\\.hcl\\'" "\\.tf\\'"))
 #+end_src
-
-#+RESULTS:
 
 *** Containers
 
@@ -395,7 +545,13 @@ Docker is a thing.
     :ensure t)
 #+end_src
 
+#+begin_src emacs-lisp
+  (use-package yaml-mode
+    :ensure t)
+#+end_src
 #+RESULTS:
+
+
 
 *** Rust, Golang and Clojure Modes
 
@@ -412,36 +568,7 @@ Docker is a thing.
   (add-to-list 'auto-mode-alist '("\\.edn\\'" . clojure-mode))
 #+end_src
 
-*** Enhanced Editing Support for Lisp
- 
-#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
-  (dolist (package '(paredit rainbow-delimiters))
-      (unless (package-installed-p package)
-	(package-refresh-contents)
-	(package-install package)))
 
-  (defun better-lisp ()
-      "Enable Paredit and Rainbow Delimiters for Lisp modes."
-      (paredit-mode 1)
-      (rainbow-delimiters-mode 1))
-
-  (dolist (hook '(emacs-lisp-mode-hook
-		    clojure-mode-hook
-		    lisp-mode-hook))
-      (add-hook hook 'better-lisp))
-
-  (add-to-list 'auto-mode-alist '("\\.el\\'" . emacs-lisp-mode))
-#+end_src
-
-*** Cider - a REPL for Clojure
-
-#+begin_src emacs-lisp:tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
-(when (not (package-installed-p 'cider))
-  (package-refresh-contents)
-  (package-install 'cider))
-
-(add-hook 'clojure-mode-hook 'cider-mode)
-#+end_src
 *** Make available
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el"
@@ -454,6 +581,34 @@ Docker is a thing.
     :ensure t
     :hook (markdown-mode . visual-line-mode))
 #+end_src
+
+*** Find and show double spaces
+
+I (and some others) am trying to get rid of my habit of inserting double spaces after full stops. Having a minor mode to highlight them is quite a handy way to catch them!
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-technical-writing.el"
+(define-minor-mode highlight-double-spaces-mode
+  "Minor mode for highlighting double spaces using theme-defined colors."
+  :lighter " DSpaces"
+  :global nil
+  :init-value nil
+  (if highlight-double-spaces-mode
+      (progn
+        (font-lock-add-keywords nil '(("  +" 0 'highlight t)))
+        (font-lock-flush)
+        (font-lock-ensure))
+    (progn
+      (font-lock-remove-keywords nil '(("  +" 0 'highlight t)))
+      (font-lock-flush)
+      (font-lock-ensure))))
+#+end_src
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-technical-writing.el"
+  (use-package ox-reveal)
+  (use-package htmlize)
+#+end_src
+
+#+RESULTS:
 
 *** Make available
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-technical-writing.el"
@@ -512,8 +667,40 @@ This is where I keep handy functions that I have written or come across.
 	    (rename-file filename new-name t)
 	    (set-visited-file-name new-name t t))))))
 #+end_src
+
+*** Reader view for org mode
+
+Quite often for my journal, I want the typing/reading environment to be a bit more attuned to reading/writing, rather than writing software. I find wider margins, a bit more line spacing, and hiding line numbers is very effective for this. This function toggles that view.
+
+#+begin_src emacs-lisp :tangle "sns-lisp/sns-functions.el" :mkdirp yes
+(use-package visual-fill-column
+  :ensure t
+  :config
+  (setq-default visual-fill-column-center-text t)
+
+  (defun sns-toggle-readable-view ()
+    "Toggle a 'readable' view with centered text, wider margins, and hidden line numbers."
+    (interactive)
+    (if (bound-and-true-p visual-fill-column-mode)
+        (progn
+          (visual-fill-column-mode -1)
+          (setq line-spacing nil)
+          (display-line-numbers-mode 1)
+          (message "Readable view disabled"))
+      (progn
+        (setq visual-fill-column-width 80)
+        (setq visual-fill-column-center-text t)
+        (setq line-spacing 0.3)
+        (display-line-numbers-mode -1)
+        (visual-fill-column-mode 1)
+        (message "Readable view enabled")))))
+#+end_src
+
 *** Make available
 
 #+begin_src emacs-lisp :tangle "sns-lisp/sns-functions.el" :mkdirp yes
 (provide 'sns-functions)
 #+end_src
+
+#+RESULTS:
+: sns-functions

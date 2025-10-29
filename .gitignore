@@ -10,6 +10,22 @@ sns-emacs-modules/
 sns-lisp/
 
 # ELPA
-
 elpa/
 /README.html
+
+# Runtime and session files
+.lsp-session-v1
+bookmarks
+projects
+tramp
+
+# Cache directories
+eln-cache/
+tree-sitter/
+auto-save/
+
+# Emacs directories
+eshell/
+games/
+transient/
+url/
