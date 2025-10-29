@@ -561,6 +561,21 @@ Docker is a thing.
     :mode "\\.rs\\'")
 #+end_src
 
+*** R
+
+ESS (Emacs Speaks Statistics) provides excellent support for R, including an integrated REPL, live code evaluation, and access to R documentation. We configure it to avoid prompting for the working directory on startup and disable some default behaviors that can be intrusive.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
+  (use-package ess
+    :ensure t
+    :mode (("\\.R\\'" . R-mode)
+           ("\\.r\\'" . R-mode))
+    :config
+    (require 'ess-site)
+    (setq ess-r-flymake-mode nil)
+    (setq ess-display-buffer-reuse-frames nil)
+    (setq ess-ask-for-ess-directory nil))
+#+end_src
 
 *** Make available
 
