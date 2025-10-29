@@ -168,7 +168,7 @@ Set a pleasant, modern, readable theme.
 (use-package ef-themes
   :ensure t
   :config
-  (load-theme 'ef-cypress t))
+  (load-theme 'ef-cherie t))
 #+end_src
 
 *** Fonts and font resizing
@@ -476,7 +476,7 @@ I like to use Speclj for BDD, so we need to update the mode to understand that t
 
 Cider is the leading REPL, against which all others are compared:
 
-#+begin_src emacs-lisp:tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
 (use-package cider
   :ensure t
   :hook (clojure-mode . cider-mode))
@@ -516,7 +516,7 @@ Magit is a very powerful and pleasant to use interface for Git.
 #+end_src
 
 *** Nix
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
   (use-package nix-mode
     :ensure t
     :mode "\\.nix\\'")
@@ -545,7 +545,7 @@ Docker is a thing.
     :ensure t)
 #+end_src
 
-#+begin_src emacs-lisp
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el"
   (use-package yaml-mode
     :ensure t)
 #+end_src
@@ -604,8 +604,10 @@ I (and some others) am trying to get rid of my habit of inserting double spaces 
 #+end_src
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-technical-writing.el"
-  (use-package ox-reveal)
-  (use-package htmlize)
+  (use-package ox-reveal
+    :ensure t)
+  (use-package htmlize
+    :ensure t)
 #+end_src
 
 #+RESULTS:
