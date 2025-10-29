@@ -78,12 +78,12 @@ Some important environment variables like PATH are not inherited by Emacs when l
   (exec-path-from-shell-initialize))
 #+end_src
 
-** Ensure Emacs uses the right shell
+** Use zsh as the shell
 
-Getting OSX to tolerate a different shell on my work machine where I have pseudo-root is a bit of a hack. This ensures that vterm and other shell buffers give me the shell I want.
+Set zsh as the default shell for Emacs shell buffers and vterm.
 
 #+begin_src emacs-lisp :tangle "init.el"
-  (setq shell-file-name "/usr/local/bin/fuck-off-osx-i-want-gnu-bash")
+  (setq shell-file-name "/bin/zsh")
   (setq explicit-shell-file-name shell-file-name)
   (with-eval-after-load 'vterm
     (setq vterm-shell shell-file-name))
@@ -553,19 +553,16 @@ Docker is a thing.
 
 
 
-*** Rust, Golang and Clojure Modes
+*** Rust and Golang
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
-  (dolist (package '(go-mode rust-mode clojure-mode))
-    (unless (package-installed-p package)
-      (package-refresh-contents)
-      (package-install package)))
+  (use-package go-mode
+    :ensure t
+    :mode "\\.go\\'")
 
-  (add-to-list 'auto-mode-alist '("\\.go\\'" . go-mode))
-  (add-to-list 'auto-mode-alist '("\\.rs\\'" . rust-mode))
-  (add-to-list 'auto-mode-alist '("\\.clj\\'" . clojure-mode))
-  (add-to-list 'auto-mode-alist '("\\.cljs\\'" . clojure-mode))
-  (add-to-list 'auto-mode-alist '("\\.edn\\'" . clojure-mode))
+  (use-package rust-mode
+    :ensure t
+    :mode "\\.rs\\'")
 #+end_src
 
 
