@@ -230,11 +230,7 @@ Use a modern mini-buffer and navigation framework:
   (use-package vertico
     :ensure t
     :init
-    (vertico-mode))
-
-  (use-package vertico-directory
-    :ensure t
-    :after vertico
+    (vertico-mode)
     :bind (:map vertico-map
 		("DEL" . vertico-directory-delete-char)
 		("M-DEL" . vertico-directory-delete-word)))
