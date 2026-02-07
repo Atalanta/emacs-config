@@ -68,22 +68,24 @@ In some environments I use Nix, so we need to make the Nix profile available to 
 
 ** Ensure shell environment variables are available
 
-Some important environment variables like PATH are not inherited by Emacs when launched from the GUI on macOS. This package grabs those from the shell so Emacs can find tools like Git, Ruby, etc.
-
+Some important environment variables like PATH are not inherited by Emacs when launched from the GUI on macOS. This package grabs those from the shell so Emacs can find tools like Git, Ruby, etc. On Linux this is less critical but harmless.
 
 #+begin_src emacs-lisp :tangle "init.el"
 (use-package exec-path-from-shell
   :ensure t
   :config
-  (exec-path-from-shell-initialize))
+  (when (memq window-system '(mac ns x))
+    (exec-path-from-shell-initialize)))
 #+end_src
 
 ** Use zsh as the shell
 
-Set zsh as the default shell for Emacs shell buffers and vterm.
+Set zsh as the default shell for Emacs shell buffers and vterm, but fall back to bash if zsh is not available. This makes the config portable across macOS and Linux systems.
 
 #+begin_src emacs-lisp :tangle "init.el"
-  (setq shell-file-name "/bin/zsh")
+  (setq shell-file-name (or (executable-find "zsh")
+                             (executable-find "bash")
+                             "/bin/bash"))
   (setq explicit-shell-file-name shell-file-name)
   (with-eval-after-load 'vterm
     (setq vterm-shell shell-file-name))
@@ -172,12 +174,12 @@ Set a pleasant, modern, readable theme.
 #+end_src
 
 *** Fonts and font resizing
-The default font size is a little small - set it to something a bit bigger. I like the Inconsolata font - this needs to be installed before this will work, so fall back if it isn't.
+Use JetBrains Mono, a modern programming font with excellent readability and ligature support. Falls back to monospace if not installed.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el" :mkdirp yes
-(if (member "Inconsolata" (font-family-list))
-    (set-face-attribute 'default nil :font "Inconsolata-18")
-  (set-face-attribute 'default nil :family "monospace" :height 180))
+(if (member "JetBrains Mono" (font-family-list))
+    (set-face-attribute 'default nil :font "JetBrains Mono-12")
+  (set-face-attribute 'default nil :family "monospace" :height 120))
 #+end_src
 Increase, decrease and reset font size with command +/-/0.
 
