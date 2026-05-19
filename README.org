@@ -1,9 +1,9 @@
 #+TITLE: SNS Emacs Config
 #+AUTHOR: Stephen Nelson-Smith
 
-This is my literate Emacs configuration. Following the principles of literate programming, it is a single file containing both plain language commentary and discussion and executeable code.
+This is my literate Emacs configuration. A single file holds both the prose explaining the config and the code that implements it.
 
-This file is the only place that changes to my configuration are made - it's a single source of truth, which results in the creation of a clean, modular Emacs configuration.
+All changes go in this file. Tangling produces the actual =.el= files Emacs loads.
 
 * Instructions
 
@@ -20,26 +20,22 @@ Tangle the config:
 emacs --batch --load org --eval '(org-babel-tangle-file "README.org")'
 #+end_example
 
-When you first open Emacs, there will be a delay while the packages are downloaded and compiled.
+First launch downloads and compiles packages, which takes a few minutes.
 
-If you wish to make changes, open this file in Emacs, update existing or create new code blocks if needed, and evaluate with =org-babel-tangle=. The code in the code blocks will be tangled to their respective locations, which will be available to an evaluated by Emacs on restart.
-
-Note: code blocks will only be tangled if decorated with =:tangle= and the path to the file you wish to write.
+To change the config: edit this file, then run =org-babel-tangle= (=C-c C-v t=). Only blocks with a =:tangle= header are written out.
 
 * Overview
 
-This file - =README.org= - is the document that generates my Emacs configuration. It is not loaded by Emacs itself, but by me, resulting in the rendered Emacs config on whatever machine the file is "tangled".
-
-There are two top level files and two directories:
+Tangling =README.org= produces:
 
 - =early-init.el=
 - =init.el=
-- =sns-emacs-modules=
-- =sns-lisp=
+- =sns-emacs-modules/=
+- =sns-lisp/=
 
 * The ~early-init.el~ file
 
-This is the first file that Emacs reads when starting up. It should have no dependencies on external packages, and is design to set up a few fundamental things before advancing to the main ~init.el~ file.
+Emacs reads this file first. It runs before any packages load and sets a few UI defaults.
 
 #+begin_src emacs-lisp :tangle "early-init.el"
   (setq inhibit-startup-message t)
@@ -51,10 +47,10 @@ This is the first file that Emacs reads when starting up. It should have no depe
 
 * The ~init.el~ file
 
-This is the main Emacs config file. This is the place to put global settings which apply across Emacs, but which do not have any impact on startup time. It also imports the modules which make up the wider config.
+Global settings and module imports.
 
 ** Support Nix
-In some environments I use Nix, so we need to make the Nix profile available to Emacs:
+On machines where I use Nix, add the Nix profile to Emacs's =PATH=:
 
 #+begin_src emacs-lisp :tangle "init.el"
 (defun setup-nix-path ()
@@ -68,7 +64,7 @@ In some environments I use Nix, so we need to make the Nix profile available to 
 
 ** Ensure shell environment variables are available
 
-Some important environment variables like PATH are not inherited by Emacs when launched from the GUI on macOS. This package grabs those from the shell so Emacs can find tools like Git, Ruby, etc. On Linux this is less critical but harmless.
+GUI Emacs on macOS doesn't inherit shell environment variables. =exec-path-from-shell= imports them so Emacs can find tools like Git. Only run it under a window system; on a Linux terminal Emacs the environment is already correct.
 
 #+begin_src emacs-lisp :tangle "init.el"
 (use-package exec-path-from-shell
@@ -80,7 +76,7 @@ Some important environment variables like PATH are not inherited by Emacs when l
 
 ** Use zsh as the shell
 
-Set zsh as the default shell for Emacs shell buffers and vterm, but fall back to bash if zsh is not available. This makes the config portable across macOS and Linux systems.
+Use zsh for shell buffers and vterm. Fall back to bash where zsh isn't installed.
 
 #+begin_src emacs-lisp :tangle "init.el"
   (setq shell-file-name (or (executable-find "zsh")
@@ -92,7 +88,7 @@ Set zsh as the default shell for Emacs shell buffers and vterm, but fall back to
 #+end_src
 
 ** Simplify auto-save and backup features
-Emacs has some built-in features to protect users from over-writing files, losing data, and corruption. Some of these are somewhat moot when using Git, and in a single user environment, and can be disabled. Emacs does not automatically save your file as you go, it maintains a cached copy of your latest work, which it updates periodically. In the event that you quit Emacs without saving your work, when you start Emacs, it will offer to recover the most recent cached copy. This is fairly helpful, but by default it keeps these auto-save files in the same directory as your working copy, which is messy, so we configure it to keep the auto-save files in a separate place.
+Git makes most of Emacs's backup features redundant. Disable backup files and lockfiles. Keep auto-save (Emacs's crash-recovery cache) but write it to a dedicated directory rather than alongside the working copy.
 
 #+begin_src emacs-lisp :tangle "init.el"
 (setq make-backup-files nil)
@@ -107,14 +103,14 @@ Emacs has some built-in features to protect users from over-writing files, losin
 #+end_src
 
 ** Allow short yes/no answers
-By default, Emacs asks us to confirm some actions, like saving unsaved changes before quitting, by typing yes or no. This setting changes that behaviour so we only need to type y or n instead.
+Accept =y= and =n= instead of =yes= and =no=.
 
 #+begin_src emacs-lisp :tangle "init.el"
   (fset 'yes-or-no-p 'y-or-n-p)
 #+end_src
 
 ** Don't persist "customisations"
-Certain behaviours in Emacs result in Emacs noticing what it considers to be "customisations" which it will save in our ~init.el~ file. We will never explicitly customise Emacs outside of version control, so this is just noise. We can prevent this from happening by telling it to write those apparent customisations to a temporary file.
+Emacs writes certain settings to =init.el= via its Customize system. All config in this repo is hand-written, so redirect those writes to a throwaway temp file.
 
 #+begin_src emacs-lisp :tangle "init.el"
 (setq custom-file (make-temp-file "emacs-custom-"))
@@ -122,7 +118,7 @@ Certain behaviours in Emacs result in Emacs noticing what it considers to be "cu
 
 ** Un-disable region-based up/downcase
 
-Changing the case of a region is disabled by default, to avoid confusion. I don't want that behaviour.
+Re-enable =upcase-region= and =downcase-region=, which Emacs disables by default.
 
 #+begin_src emacs-lisp :tangle "init.el"
 (put 'upcase-region 'disabled nil)
@@ -131,7 +127,7 @@ Changing the case of a region is disabled by default, to avoid confusion. I don'
 
 
 ** Set up package archives
-Emacs has two commonly used package archives - the GNU Elpa (Emacs Lisp Package Archive), which is 100% GPL software, and Melpa which is larger, and contains software released under non-GNU licence (including Org Roam and Magit).
+GNU ELPA holds GPL-licensed packages. MELPA holds the rest, including Org Roam and Magit.
 
 #+begin_src emacs-lisp :tangle "init.el"
 (setq package-archives
@@ -140,7 +136,7 @@ Emacs has two commonly used package archives - the GNU Elpa (Emacs Lisp Package 
 #+end_src
 
 ** Import modules
-The rest of our configuration is modular. Each module lives in the ~sns-emacs-modules~ directory.
+Modules live in =sns-emacs-modules/=. Add it to the load path.
 
 #+begin_src emacs-lisp :tangle "init.el"
   (mapc
@@ -151,11 +147,12 @@ The rest of our configuration is modular. Each module lives in the ~sns-emacs-mo
 
 * The ~sns-emacs-modules/~
 
-These are files which install and configure various aspects of the Emacs user experience.
+Each module installs and configures a related group of packages.
 
 #+begin_src emacs-lisp :tangle "init.el"
   (require 'sns-look-and-feel)
   (require 'sns-org-mode)
+  (require 'sns-knowledge-base)
   (require 'sns-development-environment)
   (require 'sns-technical-writing)
 #+end_src
@@ -164,7 +161,7 @@ These are files which install and configure various aspects of the Emacs user ex
 
 *** Theme
 
-Set a pleasant, modern, readable theme.
+=ef-themes= are modern and readable. =ef-cherie= is the default.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el" :mkdirp yes
 (use-package ef-themes
@@ -174,14 +171,14 @@ Set a pleasant, modern, readable theme.
 #+end_src
 
 *** Fonts and font resizing
-Use JetBrains Mono, a modern programming font with excellent readability and ligature support. Falls back to monospace if not installed.
+Use JetBrains Mono at 12pt if installed; otherwise fall back to the system monospace font.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el" :mkdirp yes
 (if (member "JetBrains Mono" (font-family-list))
     (set-face-attribute 'default nil :font "JetBrains Mono-12")
   (set-face-attribute 'default nil :family "monospace" :height 120))
 #+end_src
-Increase, decrease and reset font size with command +/-/0.
+Bind =Cmd-=/-/0= to increase, decrease, and reset font size.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el"
   (global-set-key (kbd "s-=") (lambda () (interactive) (text-scale-increase 1)))
@@ -190,7 +187,7 @@ Increase, decrease and reset font size with command +/-/0.
 #+end_src
 
 *** General display and navigation
-Show line numbers, and highlight where we are in the file, and make the cursor blink.
+Show line and column numbers, highlight the current line, blink the cursor.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el"
   (global-display-line-numbers-mode t)
@@ -200,7 +197,8 @@ Show line numbers, and highlight where we are in the file, and make the cursor b
   (blink-cursor-mode t)
 #+end_src
 
-*** Some buffers should not have line numbers
+*** Disable line numbers in non-file buffers
+Help, shell, REPL, and similar buffers don't need line numbers.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el"
 (dolist (mode '(help-mode
@@ -217,7 +215,7 @@ Show line numbers, and highlight where we are in the file, and make the cursor b
 #+end_src
 
 *** Run in fullscreen by default
-When Emacs starts up, you can set the size of the "frame" (the window in which Emacs runs). I like to operate in full screen, and have the option to toggle that on and off.
+Start fullscreen, and bind =C-c f= to toggle.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el"
   (set-frame-parameter nil 'fullscreen 'fullboth)
@@ -226,7 +224,7 @@ When Emacs starts up, you can set the size of the "frame" (the window in which E
 #+end_src
 
 *** Minibuffer and navigation
-Use a modern mini-buffer and navigation framework:
+Vertico for vertical completion, marginalia for annotations, orderless for fuzzy matching.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el"
   (use-package vertico
@@ -255,182 +253,77 @@ Use a modern mini-buffer and navigation framework:
 (provide 'sns-look-and-feel)
 #+end_src
 ** Org Mode
-I use Org Mode as the cockpit of my life - I maintain my work and personal journals, any writing projects, and this literate config using Org Mode. I also use Org Mode for managing my ongoing commitments, both personally and professionally.
 
-*** Templates
+Org Mode for journalling, writing projects, and this literate config.
 
-Org Tempo provides short cuts and templates for creating blocks. I use an Emacs Lisp template, since I frequently write Lisp in Org Mode, either for experimentation purposes, or as part of this config.
+*** Editing Org files
+
+Wrap long lines at word boundaries with =visual-line-mode=. Add an =org-tempo= shortcut so =<el= expands to an Emacs Lisp source block.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
   (defun setup-structure-templates ()
     (require 'org-tempo)
     (add-to-list 'org-structure-template-alist '("el" . "src emacs-lisp")))
-#+end_src
 
-*** GTD
-I use Org Mode to implement the principles and practices of GTD.
-
-**** Workflow
-I don't like the default metaphore of "todos", preferring the idea of *outcomes* (which map onto GTD open loops or projects) and *actions*. I consider *follow up* to be a specific kind of action, rather than a context of "waiting for". I also log the time at which a task enters the completion state, for future records/analysis.
-
-#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
-  (defun setup-gtd-flow ()
-    (setq org-todo-keywords '((sequence "OUTCOME" "ACTION" "FU" "|" "DONE"))
-	  org-log-done 'time))
-#+end_src
-
-**** Capture
-
-I keep all my GTD projects and actions in a single file:
-
-#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
-  (setq org-default-notes-file "~/journal/gtd.org")
-#+end_src
-
-I use two capture templates, one for *action* and one for *outcome*:
-
-#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
-    (defvar sns-open-loop-content
-      "* OUTCOME %?\n:PROPERTIES:\n:CREATED: %U\n:WHY:\n:VALUES:\n:SUCCESS:\n:END:\n")
-    (defvar sns-next-action-content
-      "** ACTION %?\n:PROPERTIES:\n:CREATED: %U\n:END:\n")
-    (defun template-content ()
-      (setq open-loop-content sns-open-loop-content
-	    next-action-content sns-next-action-content))
-#+end_src
-
-The action template requires that I navigate to the outcome under which I want to put the action, so we have a function to set that location.
-
-#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
-  (defun org-capture-next-action-location ()
-    "Open the default notes file and move cursor to the desired parent heading for the next action."
-    (find-file org-default-notes-file)
-    (org-goto))
-#+end_src
-
-#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
-  (defun setup-capture-templates ()
-    "Configure org capture templates for GTD workflow."
-    (setq org-capture-templates
-	 `(("l" "Open Loop" entry
-	    (file ,org-default-notes-file)
-	    ,open-loop-content)
-	   ("n" "Next Action" entry
-	    (function org-capture-next-action-location)
-	    ,next-action-content))))
-#+end_src
-
-**** Agenda
-I have a few agenda files:
-
-- =journal.org= - this is my daily journal of notes and thoughts.
-- =gtd.org= - this is where the list of outcomes and actions belong.
-- =habits.org= - [experimental] a place to track habits I wish to develop.
-- =1-1s.org= - my schedule of 1:1 meetings and skip level meetings.
-
-These all live in a single, private Git repo, for backup, versioning, and portablity.
-
-#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
-  (defun setup-agenda-files ()
-  "Set up Org agenda files."
-  (setq org-agenda-files '("~/journal/journal.org"
-                           "~/journal/gtd.org"
-                           "~/journal/habits.org"
-                           "~/journal/1-1s.org")))
-#+end_src
-
-I have two main views I use daily:
-
-- Actions - what next physical actions could I do that would move a project forwards
-- Outcomes - what projects do I have on my radar
-
-And for weekly review purposes I also have:
-
-- Outcomes without actions - are there any projects for which I have not yet agreed a next action?
-- Someday/Maybe - projects I might like to do, but to which I have no current commitment
-
-To facilitate these views, I have a helper function that detects if an outcome has an action
-
-#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
-(defun skip-if-has-action ()
-  "Skip subtrees with a TODO keyword of 'ACTION'."
-  (org-agenda-skip-subtree-if 'todo '("ACTION")))
-#+end_src
-
-And I filter out by default any headlines with the tag =someday=
-
-#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
-  (setq org-agenda-tag-filter-preset '("-someday")) 
-#+end_src
-
-The custom commands:
-
-#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
-  (setq org-agenda-custom-commands
-        '(("a" "Actions" todo "ACTION")
-          ("o" "Outcomes" todo "OUTCOME")
-          ("n" "Outcomes without actions"
-           todo "OUTCOME"
-           ((org-agenda-skip-function #'skip-if-has-action)))
-          ("s" "Someday/Maybe"
-           tags-todo "+someday"
-           ((org-agenda-tag-filter-preset nil)))))
-#+end_src
-**** Habits
-
-I'm experimenting with using Org Habit to keep on top of things I need to do regularly.
-
-#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
-(defun setup-org-habit ()
-  "Setup org-habit module and ensure it's loaded."
-  (require 'org-habit)
-  (setq org-modules (append org-modules '(org-habit))))
-#+end_src
-
-*** Bring it all together 
-
-I use the common community bindings for capture and agenda. Visual line mode ensures that long lines wrap on the screen, at word boundaries. 
-
-#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
   (use-package org
     :ensure nil
-    :bind (("C-c c" . org-capture)
-	   ("C-c a" . org-agenda))
     :hook (org-mode . visual-line-mode)
     :config
-    (setup-structure-templates)
-    (setup-gtd-flow)
-    (setup-agenda-files)
-    (template-content)
-    (setup-capture-templates)
-    (setup-org-habit)
-    )
+    (setup-structure-templates))
+
+  (provide 'sns-org-mode)
 #+end_src
 
-*** Arbitrary Queries
-=org-ql= is a powerful query language for Org files - I'm experimenting with it - it could end up replacing some of my agenda views.
+** Knowledge Base
 
-#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
-  (use-package org-ql
+I use [[https://www.orgroam.com/][Org Roam]] for atomic, linked notes, in the Zettelkasten style.
+
+*** Notes directory
+
+Notes live in =~/roam/=, in their own Git repo.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-knowledge-base.el" :mkdirp yes
+  (defvar sns-roam-directory
+    (expand-file-name "~/roam/")
+    "Directory containing org-roam notes.")
+
+  (make-directory sns-roam-directory t)
+#+end_src
+
+*** Org Roam
+
+I use three commands daily, bound under =C-c r=:
+
+- =C-c r f= - find or create a node
+- =C-c r i= - insert a link to a node
+- =C-c r c= - capture a new node
+
+=org-roam-db-autosync-mode= keeps the link database current.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-knowledge-base.el"
+  (use-package org-roam
     :ensure t
+    :init
+    (setq org-roam-v2-ack t)
+    :custom
+    (org-roam-directory sns-roam-directory)
+    (org-roam-completion-everywhere t)
+    :bind (("C-c r f" . org-roam-node-find)
+           ("C-c r i" . org-roam-node-insert)
+           ("C-c r c" . org-roam-capture))
     :config
-    (setq org-ql-search-directories (org-agenda-files)))
+    (org-roam-db-autosync-mode))
+
+  (provide 'sns-knowledge-base)
 #+end_src
 
-*** Make available
-
-#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
-(provide 'sns-org-mode)
-#+end_src
 ** Development Environment
 
-I use Emacs as my primary development environment - this sets up language support and tooling for the languages I use most.
+Language support and tooling for the languages I use.
 
 *** Lisp
 
-Naturally as an Emacs user, one of the most common  languages I work in is Emacs Lisp. I also use Clojure extensively.
-
-Both benefit from augmented paren support:
+Emacs Lisp and Clojure are my main Lisps. Both need paren-aware editing.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
   (show-paren-mode t)
@@ -450,11 +343,7 @@ Both benefit from augmented paren support:
 
 **** Clojure
 
-Clojure is one of my main languages. Emacs has superb support for Clojure, and is one argument for using it as my editor of choice.
-
-We install Clojure mode, and associate it with Clojure, Clojurescript and EDN files.
-
-I like to use Speclj for BDD, so we need to update the mode to understand that the BDD words are actually functions.
+=clojure-mode= for =.clj=, =.cljs=, and =.edn= files. The =put= calls teach the indenter to treat Speclj's =describe=, =context=, and =it= as definition forms.
 
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
@@ -472,7 +361,7 @@ I like to use Speclj for BDD, so we need to update the mode to understand that t
   (put 'it       'clojure-indent-function 'defun))
 #+end_src
 
-Cider is the leading REPL, against which all others are compared:
+Cider provides the Clojure REPL.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
 (use-package cider
@@ -480,7 +369,7 @@ Cider is the leading REPL, against which all others are compared:
   :hook (clojure-mode . cider-mode))
 #+end_src
 
-LSP (Language Server Protocol) gives Emacs modern IDE functionality for refactoring, documentation, and error finding.
+LSP gives IDE features: refactoring, inline documentation, error checking.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
   (use-package lsp-mode
@@ -493,7 +382,7 @@ LSP (Language Server Protocol) gives Emacs modern IDE functionality for refactor
   :ensure t)
 #+end_src
 
-Treesitter gives fast, accurate syntax parsing, offering flawless syntax highlighting, structural navigation, and context-aware editing features.
+Tree-sitter provides accurate syntax parsing for highlighting and structural navigation.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
 (use-package tree-sitter
@@ -506,7 +395,7 @@ Treesitter gives fast, accurate syntax parsing, offering flawless syntax highlig
 
 *** Magit
 
-Magit is a very powerful and pleasant to use interface for Git.
+Magit is an interface for Git.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
     (use-package magit
@@ -514,6 +403,9 @@ Magit is a very powerful and pleasant to use interface for Git.
 #+end_src
 
 *** Nix
+
+=nix-mode= for =.nix= files. =ob-nix= enables Nix code blocks in Org.
+
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
   (use-package nix-mode
     :ensure t
@@ -527,7 +419,8 @@ Magit is a very powerful and pleasant to use interface for Git.
 #+end_src
 
 *** HCL
-We need to be able to hack on HCL, even though it is nasty.
+
+For Terraform and other HCL files.
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
       (use-package hcl-mode
 	:ensure t
@@ -536,7 +429,7 @@ We need to be able to hack on HCL, even though it is nasty.
 
 *** Containers
 
-Docker is a thing.
+Dockerfile and YAML support.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
   (use-package dockerfile-mode
@@ -565,7 +458,7 @@ Docker is a thing.
 
 *** R
 
-ESS (Emacs Speaks Statistics) provides excellent support for R, including an integrated REPL, live code evaluation, and access to R documentation. We configure it to avoid prompting for the working directory on startup and disable some default behaviors that can be intrusive.
+ESS (Emacs Speaks Statistics) supports R: REPL, code evaluation, and documentation lookup. The =setq= lines suppress the working-directory prompt and a few intrusive defaults.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
   (use-package ess
@@ -594,7 +487,7 @@ ESS (Emacs Speaks Statistics) provides excellent support for R, including an int
 
 *** Find and show double spaces
 
-I (and some others) am trying to get rid of my habit of inserting double spaces after full stops. Having a minor mode to highlight them is quite a handy way to catch them!
+A minor mode that highlights double spaces, to help me break the habit of inserting them after full stops.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-technical-writing.el"
 (define-minor-mode highlight-double-spaces-mode
@@ -627,7 +520,7 @@ I (and some others) am trying to get rid of my habit of inserting double spaces 
 (provide 'sns-technical-writing)
 #+end_src
 ** Emacs Lisp Functions
-This is where I keep handy functions that I have written or come across.
+Utility functions I've written or collected.
 
 #+begin_src emacs-lisp :tangle "init.el"
   (require 'sns-functions)
@@ -682,7 +575,7 @@ This is where I keep handy functions that I have written or come across.
 
 *** Reader view for org mode
 
-Quite often for my journal, I want the typing/reading environment to be a bit more attuned to reading/writing, rather than writing software. I find wider margins, a bit more line spacing, and hiding line numbers is very effective for this. This function toggles that view.
+A toggle for prose-friendly display: wider margins, extra line spacing, no line numbers. Useful when writing in the journal.
 
 #+begin_src emacs-lisp :tangle "sns-lisp/sns-functions.el" :mkdirp yes
 (use-package visual-fill-column

@@ -18,6 +18,8 @@ elpa/
 bookmarks
 projects
 tramp
+network-security.data
+org-roam.db
 
 # Cache directories
 eln-cache/
