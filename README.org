@@ -174,6 +174,7 @@ Each module installs and configures a related group of packages.
   (require 'sns-knowledge-base)
   (require 'sns-development-environment)
   (require 'sns-technical-writing)
+  (require 'sns-emacs-api)
 #+end_src
 
 ** Look and Feel
@@ -190,12 +191,12 @@ Each module installs and configures a related group of packages.
 #+end_src
 
 *** Fonts and font resizing
-Use JetBrains Mono at 12pt if installed; otherwise fall back to the system monospace font.
+Use Maple Mono NF at 15pt if installed; otherwise fall back to the system monospace font. Matches the font configured in Ghostty so the look stays consistent across editor and terminal.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el" :mkdirp yes
-(if (member "JetBrains Mono" (font-family-list))
-    (set-face-attribute 'default nil :font "JetBrains Mono-12")
-  (set-face-attribute 'default nil :family "monospace" :height 120))
+(if (member "Maple Mono NF" (font-family-list))
+    (set-face-attribute 'default nil :font "Maple Mono NF-15")
+  (set-face-attribute 'default nil :family "monospace" :height 150))
 #+end_src
 Bind =Cmd-=/-/0= to increase, decrease, and reset font size.
 
@@ -628,3 +629,163 @@ A toggle for prose-friendly display: wider margins, extra line spacing, no line 
 
 #+RESULTS:
 : sns-functions
+
+* Emacs API
+
+This section sets up Emacs as a programmable surface for non-human
+callers — scripts, AI agents, and external tools that evaluate elisp
+via =emacsclient=. Nothing here improves the editor for me; it makes
+Emacs *callable* by other things. The server config that exposes the
+socket lives in [[Run as a server]] under =init.el=
+since it must run early. Libraries used only by external callers
+live here.
+
+** Programmatic Org edits with org-ml
+
+[[https://github.com/ndwarshuis/org-ml][org-ml]] wraps Emacs's built-in
+=org-element= API in functional, composable operations: builders like
+=om-build-headline!=, lens-style updates like =om-set-property=, and a
+serializer that preserves more of the original buffer than
+=org-element-interpret-data= does. Used by the Claude→Emacs bridge to
+edit Org files structurally rather than via text manipulation. Not
+needed when authoring Org by hand — this is purely a library for
+programmatic callers.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-emacs-api.el" :mkdirp yes
+  (use-package org-ml
+    :ensure t
+    :after org)
+#+end_src
+
+** Bridge primitives: structural reads and writes
+
+These are the building blocks for editing Org files semantically rather
+than via text manipulation. The pattern is functional-first: pure
+transforms on data wherever possible, mutation only at the boundary
+(the buffer). All names are =sns-= prefixed; the one mutating function
+is marked with =!= per Scheme convention.
+
+*** Pure: substitute strings in a string
+
+Apply an ordered list of literal-string replacements. Order matters:
+longer-or-more-specific replacements should come first so they aren't
+shadowed by shorter prefixes. Pure — input string and pairs in, new
+string out.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-emacs-api.el"
+  (defun sns-substitute-in-string (str replacements)
+    "Apply REPLACEMENTS (list of (OLD . NEW) cons cells) to STR.
+  Replacements are literal strings, applied in order. Returns a new string."
+    (seq-reduce
+     (lambda (acc pair)
+       (replace-regexp-in-string (regexp-quote (car pair)) (cdr pair) acc t t))
+     replacements
+     str))
+#+end_src
+
+*** Read: find all elements matching a predicate
+
+Walks the parsed tree and returns *every* element of the given types
+that matches =PREDICATE=. The caller supplies the parsed tree —
+typically =(org-element-parse-buffer)= — so multiple finds against
+the same parse share work.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-emacs-api.el"
+  (defun sns-find-elements (tree types predicate)
+    "Find all elements in TREE whose type is in TYPES and matches PREDICATE.
+  TYPES is a symbol or list of symbols (org-element types).
+  PREDICATE receives the element. Returns a list in document order, or
+  nil if no matches."
+    (org-element-map tree types
+      (lambda (el) (when (funcall predicate el) el))))
+#+end_src
+
+*** Read: find the unique element matching a predicate
+
+Asserts that exactly one element matches; errors loudly otherwise.
+This is the safe default when the caller means "the X I'm thinking
+of." A predicate that returns the wrong element silently is the
+worst kind of bug; this primitive turns that failure into an explicit
+error citing the actual matches found.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-emacs-api.el"
+  (defun sns-find-the-element (tree types predicate &optional what)
+    "Find the unique element in TREE matching TYPES + PREDICATE.
+  Errors if zero or more than one element matches. WHAT is an optional
+  description used in error messages. Returns the matching element."
+    (let* ((matches (sns-find-elements tree types predicate))
+           (n (length matches))
+           (label (or what "matching element")))
+      (cond
+       ((= n 0) (error "Expected exactly one %s; found 0" label))
+       ((> n 1) (error "Expected exactly one %s; found %d (positions: %s)"
+                       label n
+                       (mapcar (lambda (e) (org-element-property :begin e))
+                               matches)))
+       (t (car matches)))))
+#+end_src
+*** Read: locate an element's body region in the buffer
+
+Org-element distinguishes two element shapes for the purposes of body
+location:
+
+- /Contents-bearing/ elements (paragraph, item, headline, plain-list)
+  expose =:contents-begin= and =:contents-end= directly.
+- /Delimited/ elements (src-block, example-block, quote-block, drawer,
+  etc.) wrap their body in =#+begin_X=/=#+end_X= lines (or =:NAME:=
+  /=:END:=). Their =:contents-begin= is nil; the body must be located
+  by walking past the opening delimiter line and back from the closing
+  one.
+
+This function dispatches on whether =:contents-begin= is populated.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-emacs-api.el"
+  (defun sns-element-body-region (element)
+    "Return (BEGIN . END) of ELEMENT's body in the current buffer.
+  Handles both contents-bearing elements (paragraph, item, etc.) and
+  delimited elements (src-block, example-block, quote-block, etc.).
+  Returns nil if ELEMENT has no locatable body."
+    (let ((cb (org-element-property :contents-begin element))
+          (ce (org-element-property :contents-end element)))
+      (if (and cb ce)
+          (cons cb ce)
+        ;; Delimited element: skip the begin-delimiter line, stop before the
+        ;; end-delimiter line.
+        (let ((begin (org-element-property :begin element))
+              (end   (org-element-property :end element)))
+          (when (and begin end)
+            (save-excursion
+              (goto-char begin)
+              (forward-line 1)
+              (let ((body-begin (point)))
+                (goto-char end)
+                (when (re-search-backward
+                       "^[ \t]*\\(#\\+end_\\|:END:\\)" begin t)
+                  (cons body-begin (point))))))))))
+#+end_src
+
+*** Write: replace an element's body in the buffer
+
+The only mutating primitive. Locates the body via
+=sns-element-body-region= and replaces its text. Marked with =!= to
+signal mutation. Operates on =(current-buffer)= — the caller arranges
+that with =with-current-buffer= as needed.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-emacs-api.el"
+  (defun sns-apply-element-update! (element new-body)
+    "Replace ELEMENT's body with NEW-BODY in the current buffer.
+  ELEMENT is an org-element node. NEW-BODY is the replacement body string."
+    (let ((region (sns-element-body-region element)))
+      (unless region
+        (error "Element has no locatable body: %s" (org-element-type element)))
+      (save-excursion
+        (delete-region (car region) (cdr region))
+        (goto-char (car region))
+        (insert new-body))))
+#+end_src
+*** Make available
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-emacs-api.el"
+  (provide 'sns-emacs-api)
+#+end_src
+
