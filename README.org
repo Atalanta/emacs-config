@@ -632,24 +632,25 @@ A toggle for prose-friendly display: wider margins, extra line spacing, no line 
 
 * Emacs API
 
-This section sets up Emacs as a programmable surface for non-human
-callers — scripts, AI agents, and external tools that evaluate elisp
-via =emacsclient=. Nothing here improves the editor for me; it makes
-Emacs *callable* by other things. The server config that exposes the
-socket lives in [[Run as a server]] under =init.el=
-since it must run early. Libraries used only by external callers
-live here.
+Emacs as a programmable surface for scripts, agents, and external
+tools that evaluate elisp via =emacsclient=. The server config that
+exposes the socket is in [[Run as a server]].
 
 ** Programmatic Org edits with org-ml
 
-[[https://github.com/ndwarshuis/org-ml][org-ml]] wraps Emacs's built-in
-=org-element= API in functional, composable operations: builders like
-=om-build-headline!=, lens-style updates like =om-set-property=, and a
-serializer that preserves more of the original buffer than
-=org-element-interpret-data= does. Used by the Claude→Emacs bridge to
-edit Org files structurally rather than via text manipulation. Not
-needed when authoring Org by hand — this is purely a library for
-programmatic callers.
+[[https://github.com/ndwarshuis/org-ml][org-ml]] wraps =org-element=
+in functional operations: builders like =org-ml-build-headline=,
+lens-style updates like =org-ml-set-property=, and a serializer that
+preserves more of the original buffer than
+=org-element-interpret-data=.
+
+=org-ml= is provisioned for the bridge's tree-construction path:
+building new Org/Roam structures such as atomic notes, property
+drawers, headlines, links, and generated subtrees before serializing
+them into files. The current low-level smoke test exercises the other
+half — the region-edit path, which uses =org-element= to locate
+existing elements and buffer mutation to preserve surrounding text
+byte-for-byte.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-emacs-api.el" :mkdirp yes
   (use-package org-ml
@@ -657,20 +658,15 @@ programmatic callers.
     :after org)
 #+end_src
 
-** Bridge primitives: structural reads and writes
+** Bridge primitives
 
-These are the building blocks for editing Org files semantically rather
-than via text manipulation. The pattern is functional-first: pure
-transforms on data wherever possible, mutation only at the boundary
-(the buffer). All names are =sns-= prefixed; the one mutating function
-is marked with =!= per Scheme convention.
+Functional-first: pure transforms on data; mutation only at the buffer
+boundary, in one =!=-suffixed primitive.
 
-*** Pure: substitute strings in a string
+*** Substitute strings in a string
 
-Apply an ordered list of literal-string replacements. Order matters:
-longer-or-more-specific replacements should come first so they aren't
-shadowed by shorter prefixes. Pure — input string and pairs in, new
-string out.
+Ordered literal-string replacements. Longer-or-more-specific pairs
+must come first so shorter prefixes don't shadow them.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-emacs-api.el"
   (defun sns-substitute-in-string (str replacements)
@@ -683,12 +679,10 @@ string out.
      str))
 #+end_src
 
-*** Read: find all elements matching a predicate
+*** Find all elements matching a predicate
 
-Walks the parsed tree and returns *every* element of the given types
-that matches =PREDICATE=. The caller supplies the parsed tree —
-typically =(org-element-parse-buffer)= — so multiple finds against
-the same parse share work.
+The caller supplies the parsed tree — typically
+=(org-element-parse-buffer)= — so multiple finds share one parse.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-emacs-api.el"
   (defun sns-find-elements (tree types predicate)
@@ -700,13 +694,10 @@ the same parse share work.
       (lambda (el) (when (funcall predicate el) el))))
 #+end_src
 
-*** Read: find the unique element matching a predicate
+*** Find the unique element matching a predicate
 
-Asserts that exactly one element matches; errors loudly otherwise.
-This is the safe default when the caller means "the X I'm thinking
-of." A predicate that returns the wrong element silently is the
-worst kind of bug; this primitive turns that failure into an explicit
-error citing the actual matches found.
+Asserts exactly one match; errors with the candidate positions on 0
+or >1.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-emacs-api.el"
   (defun sns-find-the-element (tree types predicate &optional what)
@@ -724,64 +715,80 @@ error citing the actual matches found.
                                matches)))
        (t (car matches)))))
 #+end_src
-*** Read: locate an element's body region in the buffer
 
-Org-element distinguishes two element shapes for the purposes of body
-location:
+*** Locate an element's editable region
 
-- /Contents-bearing/ elements (paragraph, item, headline, plain-list)
-  expose =:contents-begin= and =:contents-end= directly.
-- /Delimited/ elements (src-block, example-block, quote-block, drawer,
-  etc.) wrap their body in =#+begin_X=/=#+end_X= lines (or =:NAME:=
-  /=:END:=). Their =:contents-begin= is nil; the body must be located
-  by walking past the opening delimiter line and back from the closing
-  one.
+Region discovery is type-specific. A paragraph's region is its
+=:contents-begin=/=:contents-end=; a src-block's is the text between
+its =#+begin_src= and =#+end_src= lines. =sns-element-edit-region=
+dispatches on element type and errors on types it has no rule for.
 
-This function dispatches on whether =:contents-begin= is populated.
+Single-dispatch is provisional. If a future workflow finds the dispatch
+awkward, factor into per-type functions and have this delegate. Only
+=paragraph= and =src-block= are covered.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-emacs-api.el"
-  (defun sns-element-body-region (element)
-    "Return (BEGIN . END) of ELEMENT's body in the current buffer.
-  Handles both contents-bearing elements (paragraph, item, etc.) and
-  delimited elements (src-block, example-block, quote-block, etc.).
-  Returns nil if ELEMENT has no locatable body."
-    (let ((cb (org-element-property :contents-begin element))
-          (ce (org-element-property :contents-end element)))
-      (if (and cb ce)
-          (cons cb ce)
-        ;; Delimited element: skip the begin-delimiter line, stop before the
-        ;; end-delimiter line.
-        (let ((begin (org-element-property :begin element))
-              (end   (org-element-property :end element)))
-          (when (and begin end)
-            (save-excursion
-              (goto-char begin)
-              (forward-line 1)
-              (let ((body-begin (point)))
-                (goto-char end)
-                (when (re-search-backward
-                       "^[ \t]*\\(#\\+end_\\|:END:\\)" begin t)
-                  (cons body-begin (point))))))))))
+  (defun sns-element-edit-region (element)
+    "Return (BEGIN . END) of ELEMENT's editable body region in the current buffer."
+    (pcase (org-element-type element)
+      ('paragraph (sns--paragraph-edit-region element))
+      ('src-block (sns--src-block-edit-region element))
+      (other (error "sns-element-edit-region: no rule for element type %s" other))))
 #+end_src
 
-*** Write: replace an element's body in the buffer
-
-The only mutating primitive. Locates the body via
-=sns-element-body-region= and replaces its text. Marked with =!= to
-signal mutation. Operates on =(current-buffer)= — the caller arranges
-that with =with-current-buffer= as needed.
+Paragraph: AST property lookup, no syntax inference.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-emacs-api.el"
-  (defun sns-apply-element-update! (element new-body)
-    "Replace ELEMENT's body with NEW-BODY in the current buffer.
-  ELEMENT is an org-element node. NEW-BODY is the replacement body string."
-    (let ((region (sns-element-body-region element)))
-      (unless region
-        (error "Element has no locatable body: %s" (org-element-type element)))
+  (defun sns--paragraph-edit-region (paragraph)
+    "Return (BEGIN . END) of PARAGRAPH's contents region."
+    (let ((cb (org-element-property :contents-begin paragraph))
+          (ce (org-element-property :contents-end paragraph)))
+      (unless (and cb ce)
+        (error "Paragraph has no :contents-begin/:contents-end"))
+      (cons cb ce)))
+#+end_src
+
+Src-block: org-element doesn't expose the body as a region
+(=:contents-begin= is nil; only =:value= holds the body text), so we
+walk past =#+begin_src= and back from =#+end_src=. The =#+end_src=
+match is case-insensitive — Org's parser treats keywords that way.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-emacs-api.el"
+  (defun sns--src-block-edit-region (src-block)
+    "Return (BEGIN . END) of SRC-BLOCK's body region.
+  The body is the text between the #+begin_src and #+end_src lines."
+    (let ((begin (org-element-property :begin src-block))
+          (end   (org-element-property :end   src-block)))
+      (unless (and begin end)
+        (error "src-block missing :begin/:end"))
       (save-excursion
-        (delete-region (car region) (cdr region))
-        (goto-char (car region))
-        (insert new-body))))
+        (goto-char begin)
+        (forward-line 1)
+        (let ((body-begin (point))
+              (case-fold-search t))
+          (goto-char end)
+          (unless (re-search-backward "^[ \t]*#\\+end_src\\b" begin t)
+            (error "src-block has no #+end_src delimiter between %d and %d" begin end))
+          (cons body-begin (point))))))
+#+end_src
+
+*** Replace a region's text
+
+The sole mutating primitive. Takes =(BEGIN . END)= and a string;
+deletes the range and inserts. Operates on =(current-buffer)=.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-emacs-api.el"
+  (defun sns-apply-region-update! (region new-text)
+    "Replace the buffer text in REGION with NEW-TEXT.
+  REGION is a cons (BEGIN . END). No element-type awareness."
+    (let ((begin (car region))
+          (end   (cdr region)))
+      (unless (and (integerp begin) (integerp end) (<= begin end))
+        (error "sns-apply-region-update!: bad region %S" region))
+      (save-excursion
+        (delete-region begin end)
+        (goto-char begin)
+        (insert new-text))))
 #+end_src
 *** Make available
 
