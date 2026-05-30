@@ -145,6 +145,25 @@ Modules live in =sns-emacs-modules/=. Add it to the load path.
    '("sns-emacs-modules" "sns-lisp"))
 #+end_src
 
+** Run as a server
+
+Run an Emacs server so external tools — =emacsclient=, scripts, AI agents
+— can evaluate elisp in this Emacs. Pin the socket to =~/.emacs.d/server/=
+so its path doesn't depend on =$TMPDIR= and is reachable from any shell.
+Create the directory with mode =700= — =server.el= refuses to run if it's
+group- or world-accessible, since a writable socket directory would let
+other users spoof the server. Start the server only if one isn't already
+running.
+
+#+begin_src emacs-lisp :tangle "init.el"
+  (require 'server)
+  (setq server-socket-dir (expand-file-name "server/" user-emacs-directory))
+  (with-file-modes #o700
+    (make-directory server-socket-dir t))
+  (unless (server-running-p)
+    (server-start))
+#+end_src
+
 * The ~sns-emacs-modules/~
 
 Each module installs and configures a related group of packages.
