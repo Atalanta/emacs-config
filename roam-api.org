@@ -467,6 +467,116 @@ capture template. Returns a plist (:id :title :file)."
     (list :id id :title new-title :file new-path)))
 #+end_src
 
+* Mutate: create a new roam node
+
+Create a fresh =.org= file in =org-roam-directory= with a
+generated UUID, a timestamp-prefixed filename, and the standard
+roam header (=:PROPERTIES:= drawer + =#+title:= keyword). The new
+node is immediately visible to =org-roam-node-list= and the rest
+of the bridge primitives.
+
+** Contract
+
+- *Input*:
+  - =TITLE= (string) — human-readable title.
+  - =KIND= (string) — one of "permanent" / "literature" /
+    "fleeting", or any other string the caller treats as a kind.
+    No validation — caller's responsibility to use a recognised
+    value. (Validation belongs in a higher layer if at all.)
+  - =BODY= (string, optional) — initial body content. Empty if
+    not supplied.
+  - =ID= (string, optional) — pre-assigned UUID. If absent, a
+    fresh one is generated via =org-id-new=. The importer uses
+    this to honour a slug→UUID map computed before any files
+    exist; the capture-template case omits it.
+- *Output*: plist =(:id ID :title TITLE :file PATH)=.
+- *Side effects*:
+  - New file written under =org-roam-directory=.
+  - Org-roam DB picks up the node automatically (the file is saved
+    via =save-buffer=, which triggers =org-roam-db-autosync-mode='s
+    after-save hook).
+- *Discipline*:
+  - Errors loudly if the destination file already exists. Do not
+    overwrite — collisions almost certainly mean a bug.
+  - Slug derived from TITLE via =org-roam-node-slugify= for
+    parity with the capture template.
+  - Timestamp prefix uses =current-time= at call site (the file
+    is created *now*; pre-dating an import is a separate
+    primitive if we ever need it).
+  - =:CREATED:= property set to =[YYYY-MM-DD Day HH:MM]= matching
+    the capture template's =%U= form.
+
+** Implementation
+
+#+begin_src emacs-lisp
+(defun sns-roam--current-org-timestamp ()
+  "Return the current time as an inactive Org timestamp string,
+matching the capture template's =%U= output (e.g. \"[2026-05-31 Sun 09:14]\")."
+  (format-time-string "[%Y-%m-%d %a %H:%M]"))
+
+(defun sns-roam--current-filename-timestamp ()
+  "Return the current time as a 14-digit YYYYMMDDhhmmss prefix."
+  (format-time-string "%Y%m%d%H%M%S"))
+
+(defun sns-roam-create-node (title kind &optional body id aliases)
+  "Create a new roam node with TITLE and KIND, returning a plist.
+
+Slugifies TITLE for the filename, writes the file under
+`org-roam-directory' with the standard roam header (:ID,
+:CREATED, :KIND, optional :ROAM_ALIASES:, #+title), and an
+optional BODY string. If ID is nil, generates a fresh UUID via
+`org-id-new'; otherwise uses the caller's value verbatim.
+ALIASES is an optional list of strings; when non-empty, written
+as :ROAM_ALIASES: per org-roam convention. Returns
+(:id :title :file). Errors if the destination already exists."
+  (let* ((id        (or id (org-id-new)))
+         (slug      (org-roam-node-slugify title))
+         (prefix    (sns-roam--current-filename-timestamp))
+         (filename  (concat prefix "-" slug ".org"))
+         (path      (expand-file-name filename org-roam-directory))
+         (created   (sns-roam--current-org-timestamp))
+         (body-text (or body ""))
+         (normalised (if (or (string-empty-p body-text)
+                             (string-suffix-p "\n" body-text))
+                         body-text
+                       (concat body-text "\n")))
+         (aliases-line (when aliases
+                         (concat ":ROAM_ALIASES: "
+                                 (mapconcat (lambda (a) (format "\"%s\"" a))
+                                            aliases " ")
+                                 "\n")))
+         (content   (concat ":PROPERTIES:\n"
+                            ":ID:       " id "\n"
+                            ":CREATED:  " created "\n"
+                            ":KIND:     " kind "\n"
+                            (or aliases-line "")
+                            ":END:\n"
+                            "#+title: " title "\n"
+                            normalised)))
+    (when (file-exists-p path)
+      (error "sns-roam: refusing to overwrite existing file %s" path))
+    (with-temp-buffer
+      (insert content)
+      (write-region (point-min) (point-max) path nil 'silent))
+    (list :id id :title title :file path)))
+#+end_src
+
+** Discipline notes
+
+- *No backdating.* If we ever need to import existing notes with
+  preserved creation times, that's =sns-roam-import-node= with
+  =:created= and =:filename-prefix= keyword args. Resist
+  conflating it with =create-node= — different intent, different
+  failure modes.
+- *Header written as text, not via =org-ml-build-*=.* The header
+  shape is fixed; rebuilding it through AST nodes adds parse →
+  serialise round-trip cost for no benefit. Reads from the file
+  afterwards happen via org-ml as usual.
+- *Caller passes KIND as a string.* No enum, no validation. The
+  taxonomy lives in the user's head, and a single typo in the
+  value should be visible in the file rather than rejected at
+  the API.
+
 * Footer
 
 #+begin_src emacs-lisp

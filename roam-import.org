@@ -1,0 +1,330 @@
+#+TITLE: Roam Import — Obsidian → org-roam pipeline
+#+AUTHOR: SNS
+#+PROPERTY: header-args:emacs-lisp :tangle "sns-emacs-modules/sns-roam-import.el" :mkdirp yes :results silent
+
+* Overview
+
+A small functional pipeline that converts an Obsidian-shaped
+Markdown vault into roam nodes. Pure stages threaded through a
+driver; side effects (read, shell-out, write) live at the edges.
+
+The conversion uses =pandoc= as the heavy lifter — markdown →
+org syntax, wikilink shape, heading shift, YAML →
+=#+title:= — and a small post-processing pass to rewrite
+=[[file:slug][text]]= links into =[[id:UUID][text]]= using the
+slug→UUID map produced in a first pass.
+
+This file tangles to =sns-emacs-modules/sns-roam-import.el= and
+is loaded via =(require 'sns-roam-import)= once we wire it.
+Tangle:
+
+#+begin_src sh :tangle no
+emacs --batch --load org --eval '(org-babel-tangle-file "roam-import.org")'
+#+end_src
+
+** Pipeline shape
+
+Each stage takes a plist, returns a plist; no shared mutable
+state.
+
+#+begin_example
+md-path → :read-source       → (:yaml :body :path)
+       → :parse-yaml         → (:title :aliases :body :path)
+       → :pandoc             → (:title :aliases :org-body :path)
+       → :rewrite-wikilinks  → (:title :aliases :org-body :path)
+       → :create-node        → (:id :title :file :aliases)
+#+end_example
+
+The driver =sns-roam-import-from-markdown= threads these via
+=thread-last= and returns the final plist. Two-pass orchestration
+(slug→UUID map built in a first pass) lives in
+=sns-roam-import-vault=.
+
+* Header
+
+We pull in =yaml.el= via =use-package= here rather than touching
+the main literate config — the dep is import-local for now. We
+can lift it into =sns-knowledge-base= later if it earns the
+right to live there.
+
+#+begin_src emacs-lisp
+;;; sns-roam-import.el --- Obsidian → org-roam import pipeline -*- lexical-binding: t; -*-
+;;
+;; This file is generated from roam-import.org. Do not edit directly.
+;;
+;;; Code:
+
+(require 'sns-roam-api)
+(require 'cl-lib)
+(require 'subr-x)
+
+(use-package yaml
+  :ensure t)
+(require 'yaml)
+#+end_src
+
+* Pure stages
+
+Each function below is a pipeline stage. Read them as a list of
+transformations; the driver wires them together.
+
+** Read source
+
+Read the =.md= file and split YAML frontmatter from body. YAML
+is delimited by =---= on its own line at the top.
+
+#+begin_src emacs-lisp
+(defun sns-roam-import--read-source (path)
+  "Return (:path :yaml :body) for the markdown file at PATH.
+
+If the file has no YAML frontmatter, =:yaml= is the empty string
+and =:body= is the whole file."
+  (let ((raw (with-temp-buffer
+               (insert-file-contents path)
+               (buffer-string))))
+    (if (string-match "\\`---\n\\(\\(?:.\\|\n\\)*?\\)\n---\n\\(\\(?:.\\|\n\\)*\\)\\'" raw)
+        (list :path path
+              :yaml (match-string 1 raw)
+              :body (match-string 2 raw))
+      (list :path path :yaml "" :body raw))))
+#+end_src
+
+** Parse YAML
+
+Extract =title= and =aliases= using =yaml.el= — a real YAML
+parser, not a regex. Tags and =type= are deliberately ignored:
+vault-local labels don't carry meaning into a general slipbox.
+
+=yaml-parse-string= returns nested hash tables by default; we
+ask for alists so plist threading stays simple. Aliases come
+back as a vector — flatten to a list.
+
+#+begin_src emacs-lisp
+(defun sns-roam-import--parse-yaml (input)
+  "Parse YAML in INPUT plist's =:yaml= and add =:title= and =:aliases=.
+Errors loudly if no title is found — every roam node needs one."
+  (let* ((yaml-str (plist-get input :yaml))
+         (parsed   (if (string-empty-p yaml-str)
+                       nil
+                     (yaml-parse-string yaml-str
+                                        :object-type 'alist
+                                        :sequence-type 'list)))
+         (title    (alist-get 'title parsed))
+         (aliases  (alist-get 'aliases parsed)))
+    (unless title
+      (error "sns-roam-import: no `title:' in %s" (plist-get input :path)))
+    (append (list :title title :aliases aliases) input)))
+#+end_src
+
+** Pandoc
+
+Shell out to =pandoc= with the four flags that do most of the
+clean-up:
+
+- =markdown+wikilinks_title_after_pipe-auto_identifiers= —
+  parse =[[X|Y]]= wikilinks; suppress =:CUSTOM_ID:= drawers.
+- =--shift-heading-level-by=-1= — drop the H1 (which duplicated
+  =#+title:= anyway) and demote everything else.
+- =--wrap=preserve= — no line-rewrapping; preserves authored
+  paragraph shape.
+- =-s= with metadata-block extension — emits =#+title:= from
+  YAML automatically (we'll discard pandoc's =#+title:= because
+  we already have ours from =:parse-yaml=, and they should match).
+
+Pandoc takes input on stdin to avoid temp files.
+
+#+begin_src emacs-lisp
+(defun sns-roam-import--shell-pandoc (markdown)
+  "Run pandoc on MARKDOWN string, return the org-formatted output.
+Errors if pandoc exits non-zero."
+  (with-temp-buffer
+    (let ((exit (let ((coding-system-for-write 'utf-8))
+                  (call-process-region
+                   markdown nil "pandoc" nil t nil
+                   "-f" "markdown+wikilinks_title_after_pipe-auto_identifiers"
+                   "-t" "org"
+                   "--shift-heading-level-by=-1"
+                   "--wrap=preserve"))))
+      (unless (eq exit 0)
+        (error "sns-roam-import: pandoc exited %s\n%s" exit (buffer-string)))
+      (buffer-string))))
+
+(defun sns-roam-import--strip-pandoc-title (org-output)
+  "Remove the leading =#+title:= line emitted by pandoc -s, if present.
+We use the title from YAML directly to avoid mismatch surprises."
+  (replace-regexp-in-string "\\`#\\+title:.*\n+" "" org-output))
+
+(defun sns-roam-import--pandoc (input)
+  "Run pandoc on INPUT's =:body= and add =:org-body=."
+  (let* ((body     (plist-get input :body))
+         (org      (sns-roam-import--shell-pandoc body))
+         (cleaned  (sns-roam-import--strip-pandoc-title org)))
+    (append (list :org-body cleaned)
+            (cl-loop for (k v) on input by #'cddr
+                     unless (eq k :body)
+                     append (list k v)))))
+#+end_src
+
+** Rewrite wikilinks
+
+Pandoc emits =[[file:SLUG][TEXT]]= for every Obsidian wikilink.
+Replace each with =[[id:UUID][TEXT]]= when the slug is in
+UUID-MAP; leave others untouched (loud log) — they point at
+notes outside the import set, and the user must resolve those
+by hand.
+
+#+begin_src emacs-lisp
+(defun sns-roam-import--rewrite-wikilinks-in (org-body uuid-map)
+  "Return ORG-BODY with =[[file:SLUG][TEXT]]= rewritten via UUID-MAP.
+UUID-MAP is an alist ((SLUG . UUID) ...). Logs a warning for
+unresolved slugs but does not error."
+  (replace-regexp-in-string
+   "\\[\\[file:\\([^]]+\\)\\]\\[\\([^]]+\\)\\]\\]"
+   (lambda (match)
+     (let* ((slug (match-string 1 match))
+            (text (match-string 2 match))
+            (uuid (cdr (assoc slug uuid-map))))
+       (if uuid
+           (format "[[id:%s][%s]]" uuid text)
+         (warn "sns-roam-import: unresolved wikilink slug %S; left as-is" slug)
+         match)))
+   org-body t))
+
+(defun sns-roam-import--rewrite-wikilinks (uuid-map)
+  "Return a stage function that rewrites wikilinks using UUID-MAP."
+  (lambda (input)
+    (let ((rewritten (sns-roam-import--rewrite-wikilinks-in
+                      (plist-get input :org-body)
+                      uuid-map)))
+      (plist-put (copy-sequence input) :org-body rewritten))))
+#+end_src
+
+** Create node
+
+The single side-effecting stage. =create-node= writes the file
+via =sns-roam-create-node=, passing aliases through so they land
+in the property drawer at write time. No second pass — the
+just-written node need not be re-opened to set =:ROAM_ALIASES:=,
+which kept the importer wedged on org-roam's DB lookup before
+autosync had indexed the new file.
+
+#+begin_src emacs-lisp
+(defun sns-roam-import--create-node (input)
+  "Create a roam node from INPUT, returning (:id :title :file :aliases).
+Body comes from =:org-body=; KIND is hard-coded =permanent= for
+imports — the corpus we're importing is by definition the
+distilled, atomic kind. If INPUT has a pre-assigned =:id=, it's
+used verbatim; otherwise =sns-roam-create-node= generates one.
+Aliases are passed through to =sns-roam-create-node= so the
+property drawer is written with =:ROAM_ALIASES:= included from
+the start. Threading the pre-assigned ID through is what makes
+the two-pass vault import work (wikilinks resolve to the same
+UUIDs the map promised)."
+  (let* ((aliases (plist-get input :aliases))
+         (created (sns-roam-create-node
+                   (plist-get input :title)
+                   "permanent"
+                   (plist-get input :org-body)
+                   (plist-get input :id)
+                   aliases)))
+    (append created (list :aliases aliases))))
+#+end_src
+
+* Drivers
+
+** Single-file import
+
+For testing one file at a time. =UUID-MAP= is the slug→UUID
+alist used for wikilink resolution; pass =nil= when there's
+nothing to resolve. =PRE-ASSIGNED-ID= is optional — pass a UUID
+to use a specific one (the vault driver does this); omit to let
+=sns-roam-create-node= generate a fresh UUID.
+
+#+begin_src emacs-lisp
+(defun sns-roam-import--inject-id (input pre-assigned-id)
+  "Add =:id= PRE-ASSIGNED-ID to INPUT plist if non-nil; else return as-is.
+Lets the create-node stage pick up the pre-assigned UUID
+without any temporal coupling between caller and callee."
+  (if pre-assigned-id
+      (plist-put (copy-sequence input) :id pre-assigned-id)
+    input))
+
+(defun sns-roam-import-from-markdown (path uuid-map &optional pre-assigned-id)
+  "Import the markdown file at PATH as a roam node.
+UUID-MAP is the slug→UUID alist for wikilink resolution.
+PRE-ASSIGNED-ID, if non-nil, is used verbatim as the new node's
+UUID; otherwise a fresh one is generated. Returns the final
+plist (:id :title :file :aliases)."
+  (thread-last (sns-roam-import--read-source path)
+               (sns-roam-import--parse-yaml)
+               (sns-roam-import--pandoc)
+               (funcall (sns-roam-import--rewrite-wikilinks uuid-map))
+               ((lambda (input) (sns-roam-import--inject-id input pre-assigned-id)))
+               (sns-roam-import--create-node)))
+#+end_src
+
+** Two-pass vault import
+
+Pass 1: derive a slug→UUID alist by generating one UUID per
+markdown file, keyed by filename-base. Pure data.
+
+Pass 2: thread each file through =sns-roam-import-from-markdown=
+with the map and its pre-assigned UUID. Each call honours its
+own UUID via the explicit argument — no dynamic-state tricks.
+
+#+begin_src emacs-lisp
+(defun sns-roam-import--md-slug (path)
+  "Return the slug for an Obsidian markdown file, derived from filename.
+Obsidian wikilinks resolve by filename-without-extension, so
+that's what we use as the map key."
+  (file-name-base path))
+
+(defun sns-roam-import--build-uuid-map (md-paths)
+  "Return alist mapping each PATH's slug to a freshly-generated UUID.
+Pure — no files touched."
+  (mapcar (lambda (p)
+            (cons (sns-roam-import--md-slug p) (org-id-new)))
+          md-paths))
+
+(defun sns-roam-import-vault (md-paths)
+  "Import every markdown file in MD-PATHS as a roam node.
+Two-pass: first derives a slug→UUID map, then threads each file
+through the full pipeline carrying its pre-assigned UUID so
+intra-vault wikilinks resolve correctly. Returns a list of
+final plists, one per file."
+  (let ((uuid-map (sns-roam-import--build-uuid-map md-paths)))
+    (mapcar (lambda (p)
+              (let ((pre-uuid (cdr (assoc (sns-roam-import--md-slug p)
+                                          uuid-map))))
+                (sns-roam-import-from-markdown p uuid-map pre-uuid)))
+            md-paths)))
+#+end_src
+
+* Discipline notes
+
+- *Pure stages, side effects at the edges.* Read at the start,
+  write at the end; everything in between transforms plists.
+- *Plist threading via =thread-last=.* No deep nesting, no
+  intermediate variable churn. The driver reads top-to-bottom.
+- *No magic globals.* UUID-MAP is an explicit argument
+  everywhere; never a dynamic-let or top-level state.
+- *Two-pass vault import keeps wikilink resolution honest.*
+  Pass 1 produces the map purely; pass 2 honours it by passing
+  each file's pre-assigned UUID as an explicit argument all the
+  way down to =sns-roam-create-node=. No dynamic state, no
+  =cl-letf=, no temporal coupling between caller and callee.
+- *Loud failure on missing title.* Every roam node needs a
+  title; missing means the source YAML is broken.
+- *Soft failure on unresolved wikilinks.* Logged via =warn=,
+  link left as-is. Reasonable because we may import in stages
+  or against a vault with external references.
+- *KIND hard-coded =permanent=.* The Obsidian observability
+  vault is by construction a set of distilled atomic notes.
+  If a future import has mixed kinds, lift KIND to a parameter.
+
+* Footer
+
+#+begin_src emacs-lisp
+(provide 'sns-roam-import)
+;;; sns-roam-import.el ends here
+#+end_src
