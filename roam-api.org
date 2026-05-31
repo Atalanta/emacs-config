@@ -89,6 +89,384 @@ QUERY is a string. Empty list on no match."
   full-list scans hurt, we add an =:limit= keyword later — but
   silent caps are forbidden by the design discipline.
 
+* Mutate: set a file-level property
+
+Set or update a single property in the top-level =:PROPERTIES:=
+drawer of a roam node's file. Used for retrofitting metadata
+(=:KIND:=, =:CREATED:=, etc.) onto existing notes, and as the
+foundation for any future =roam-distill= writes that touch
+file-level metadata.
+
+** Contract
+
+- *Input*:
+  - =ID= (string) — the roam node UUID. Located via
+    =org-roam-node-from-id=. *Loud failure* if no such node exists.
+  - =KEY= (string) — property name, without colons (e.g. =KIND=,
+    not =:KIND:=).
+  - =VALUE= (string) — property value.
+- *Output*: =t= on success. Errors loudly otherwise.
+- *Side effect*: rewrites the file on disk. The mutation is
+  idempotent — calling twice with the same value is a no-op
+  (writes the same bytes).
+- *Discipline*: one node, one property, one call. No batching,
+  no fuzzy match. Caller resolves the ID first.
+
+** Implementation
+
+Uses =org-ml= to parse the file's first =section=, find or build
+its =property-drawer=, set the requested =node-property=, and
+write back. Never =Edit='s the file as text.
+
+#+begin_src emacs-lisp
+(require 'org-ml)
+
+(defun sns-roam--node-file-or-error (id)
+  "Return the file path for roam node ID, or signal an error.
+Loud failure on unknown ID — never returns nil."
+  (let ((node (org-roam-node-from-id id)))
+    (unless node
+      (error "sns-roam: no roam node with id %S" id))
+    (org-roam-node-file node)))
+
+(defun sns-roam--upsert-node-property (drawer key value)
+  "Return DRAWER with KEY set to VALUE.
+If KEY already present, replace its value; otherwise append a new
+node-property as the drawer's last child. Pure — does not mutate."
+  (let* ((children (org-ml-get-children drawer))
+         (found    nil)
+         (updated  (mapcar
+                    (lambda (np)
+                      (if (and (org-ml-is-type 'node-property np)
+                               (string= (org-ml-get-property :key np) key))
+                          (progn
+                            (setq found t)
+                            (org-ml-set-property :value value np))
+                        np))
+                    children)))
+    (org-ml-set-children
+     (if found
+         updated
+       (append updated (list (org-ml-build-node-property key value))))
+     drawer)))
+
+(defun sns-roam-set-property (id key value)
+  "Set property KEY to VALUE in the top-level drawer of roam node ID.
+
+ID is a roam UUID; KEY is the bare property name (no colons);
+VALUE is a string. Returns t on success. Errors if the node is
+unknown, or if the file has no top-level section/drawer to
+update (which would mean it isn't a well-formed roam file)."
+  (let ((file (sns-roam--node-file-or-error id)))
+    (with-current-buffer (find-file-noselect file)
+      (let* ((tree     (org-ml-parse-this-buffer))
+             (section  (car (org-ml-get-children tree))))
+        (unless (and section (org-ml-is-type 'section section))
+          (error "sns-roam: %s has no top-level section" file))
+        (let* ((sec-children (org-ml-get-children section))
+               (drawer       (cl-find-if
+                              (lambda (c) (org-ml-is-type 'property-drawer c))
+                              sec-children)))
+          (unless drawer
+            (error "sns-roam: %s has no top-level property-drawer" file))
+          (let* ((new-drawer   (sns-roam--upsert-node-property drawer key value))
+                 (new-section  (org-ml-set-children
+                                (mapcar (lambda (c)
+                                          (if (eq c drawer) new-drawer c))
+                                        sec-children)
+                                section))
+                 (new-tree     (org-ml-set-children
+                                (cons new-section
+                                      (cdr (org-ml-get-children tree)))
+                                tree)))
+            (erase-buffer)
+            (insert (org-ml-to-string new-tree))
+            (save-buffer)
+            t))))))
+#+end_src
+
+** Discipline notes
+
+- *Loud failure on unknown ID.* No silent skip, no auto-create.
+  If the caller passes a UUID that doesn't resolve, that's a bug
+  upstream and we want the stack trace.
+- *No append-if-no-drawer.* If a roam file somehow lacks a
+  property-drawer, we error rather than build one. Building one
+  is a different operation (=sns-roam-init-properties= or similar)
+  with different semantics; conflating them hides bugs.
+- *Idempotent on re-application.* Setting =:KIND:= to =permanent=
+  twice writes the same bytes both times. Useful for retrofit
+  scripts that may re-run.
+- *Single-property granularity.* Multi-property updates compose
+  by repeated calls. Resist the urge to add a batched API until
+  we have a real callsite that needs it.
+
+* Mutate: replace the body of a node
+
+Replace everything *after* the property drawer and =#+title:=
+keyword with new content. The drawer and title are preserved
+verbatim; everything from the line after =#+title:= through
+end-of-buffer is rewritten.
+
+Used for trimming / rewriting fleeting captures into atomic
+permanent notes. The minimum viable body-write — surgical
+paragraph edits are a later primitive.
+
+** Contract
+
+- *Input*:
+  - =ID= (string) — the roam node UUID. Loud failure if unknown.
+  - =NEW-BODY= (string) — the replacement body text. May be empty.
+    Should *not* include the property drawer or =#+title:= line —
+    those are preserved automatically. Trailing newline normalised
+    (we ensure the file ends in exactly one =\n=).
+- *Output*: =t= on success.
+- *Side effect*: rewrites the file on disk.
+- *Discipline*: replaces the *entire* body. There is no merge,
+  no append. If you want to add to existing content, read the
+  current body first, concatenate, and call this with the result.
+
+** Implementation
+
+Strategy: use org-ml to locate the end of the title keyword
+(the last element in the first =section=), then splice the new
+body as raw text after that point. We deliberately do *not*
+rebuild the body through =org-ml-build-*= — that would force
+the caller to pre-parse their content into AST nodes, which is
+overkill for "here's some prose, put it in the file".
+
+Instead: parse the section, find the position right after
+=#+title:=, erase from that point to =point-max=, insert
+NEW-BODY. The drawer and title remain untouched as bytes.
+
+#+begin_src emacs-lisp
+(defun sns-roam--title-end-position (section)
+  "Return buffer position immediately after the section's last header element.
+A roam file's first section contains: property-drawer, then
+keywords (#+title:, possibly others). Returns the :end of the
+last keyword child, which is where the body proper begins."
+  (let* ((children (org-ml-get-children section))
+         (header-children
+          (cl-remove-if-not
+           (lambda (c) (or (org-ml-is-type 'property-drawer c)
+                           (org-ml-is-type 'keyword c)))
+           children)))
+    (unless header-children
+      (error "sns-roam: section has no property-drawer or keywords"))
+    (org-ml-get-property :end (car (last header-children)))))
+
+(defun sns-roam-set-body (id new-body)
+  "Replace the body of roam node ID with NEW-BODY.
+
+The property drawer and =#+title:= keyword are preserved
+verbatim; everything after them is replaced. NEW-BODY is a
+string. Returns t on success.
+
+Errors loudly on unknown ID, missing section, or missing
+header (drawer + keywords)."
+  (let ((file (sns-roam--node-file-or-error id)))
+    (with-current-buffer (find-file-noselect file)
+      (let* ((tree    (org-ml-parse-this-buffer))
+             (section (car (org-ml-get-children tree))))
+        (unless (and section (org-ml-is-type 'section section))
+          (error "sns-roam: %s has no top-level section" file))
+        (let ((body-start (sns-roam--title-end-position section))
+              (normalised (if (or (string-empty-p new-body)
+                                  (string-suffix-p "\n" new-body))
+                              new-body
+                            (concat new-body "\n"))))
+          (delete-region body-start (point-max))
+          (goto-char body-start)
+          (insert normalised)
+          (save-buffer)
+          t)))))
+#+end_src
+
+** Discipline notes
+
+- *Drawer + title preserved by byte-position, not by reconstruction.*
+  We trust org-ml to tell us *where* the header ends; we don't
+  ask it to rebuild the header. Fewer round-trip surprises.
+- *Empty body is valid.* Calling with =""= produces a file with
+  just drawer + title + a trailing newline. Useful for clearing
+  a note before re-populating in stages.
+- *No diff or merge.* Total replace only. If a "smart merge"
+  primitive ever wants to exist, it composes from
+  =sns-roam-get-body= (read) + caller logic + =sns-roam-set-body=.
+
+* Mutate: set a section-level keyword
+
+Set or replace a =#+KEY: value= keyword in the file's first
+section. =#+title:= is the canonical use, but the primitive is
+generic — works for any single-valued section keyword.
+
+** Contract
+
+- *Input*:
+  - =ID= (string) — the roam node UUID. Loud failure if unknown.
+  - =KEY= (string) — keyword name, *uppercase, without leading*
+    =#+= or trailing colon (so =TITLE=, not =#+title:=). Org's
+    parser stores keyword keys uppercased; we follow that.
+  - =VALUE= (string) — the new value.
+- *Output*: =t= on success.
+- *Side effect*: rewrites the file on disk.
+- *Discipline*:
+  - If the keyword is already present, replaces its value.
+  - If absent, appends a new keyword as the section's last
+    header element (after the property drawer and any existing
+    keywords).
+  - Idempotent: same KEY+VALUE twice writes the same bytes.
+
+** Implementation
+
+#+begin_src emacs-lisp
+(defun sns-roam--upsert-keyword (section key value)
+  "Return SECTION with KEY's keyword set to VALUE.
+Replaces existing keyword in place; appends if absent."
+  (let* ((children (org-ml-get-children section))
+         (found    nil)
+         (updated  (mapcar
+                    (lambda (c)
+                      (if (and (org-ml-is-type 'keyword c)
+                               (string= (org-ml-get-property :key c) key))
+                          (progn
+                            (setq found t)
+                            (org-ml-set-property :value value c))
+                        c))
+                    children)))
+    (org-ml-set-children
+     (if found
+         updated
+       (append updated (list (org-ml-build-keyword key value))))
+     section)))
+
+(defun sns-roam-set-keyword (id key value)
+  "Set #+KEY: VALUE in the top-level section of roam node ID.
+
+KEY is the bare uppercase keyword name (e.g. \"TITLE\"); VALUE
+is a string. Returns t on success. Errors loudly on unknown ID
+or missing top-level section."
+  (let ((file (sns-roam--node-file-or-error id)))
+    (with-current-buffer (find-file-noselect file)
+      (let* ((tree    (org-ml-parse-this-buffer))
+             (section (car (org-ml-get-children tree))))
+        (unless (and section (org-ml-is-type 'section section))
+          (error "sns-roam: %s has no top-level section" file))
+        (let* ((new-section (sns-roam--upsert-keyword section key value))
+               (new-tree    (org-ml-set-children
+                             (cons new-section
+                                   (cdr (org-ml-get-children tree)))
+                             tree)))
+          (erase-buffer)
+          (insert (org-ml-to-string new-tree))
+          (save-buffer)
+          t)))))
+#+end_src
+
+* Mutate: rename a node's file on disk
+
+Rename the =.org= file backing a roam node, preserving the
+timestamp prefix and updating the visiting buffer (if any) so
+nothing stales out. The roam DB picks up the new path on next
+sync.
+
+** Contract
+
+- *Input*:
+  - =ID= (string) — the roam UUID. Loud failure if unknown.
+  - =NEW-SLUG= (string) — the new filename body (between
+    timestamp prefix and =.org= extension). Snake_case
+    expected; we don't sanitise — caller's responsibility.
+- *Output*: the new absolute file path on success.
+- *Side effect*:
+  - File renamed on disk.
+  - Any buffer visiting the old path is updated via
+    =set-visited-file-name= so it now visits the new path.
+- *Discipline*:
+  - Preserves the existing timestamp prefix verbatim. If the
+    filename doesn't have a recognisable =NNNNNNNNNNNNNN-= prefix,
+    error loudly rather than guess.
+  - Errors if the destination filename already exists.
+  - Does *not* update =#+title:= or any properties — pure
+    filename operation. Composite renames live in
+    =sns-roam-rename=.
+
+** Implementation
+
+#+begin_src emacs-lisp
+(defun sns-roam--split-roam-filename (path)
+  "Return (PREFIX . SLUG) from a roam filename PATH.
+PREFIX is the 14-digit timestamp + dash; SLUG is the body
+between dash and =.org=. Errors if PATH doesn't match the
+expected shape."
+  (let ((name (file-name-nondirectory path)))
+    (unless (string-match "^\\([0-9]\\{14\\}-\\)\\(.+\\)\\.org$" name)
+      (error "sns-roam: %s does not match roam filename shape" name))
+    (cons (match-string 1 name) (match-string 2 name))))
+
+(defun sns-roam-rename-file (id new-slug)
+  "Rename roam node ID's file to use NEW-SLUG, preserving the timestamp prefix.
+
+Returns the new absolute path. Errors if ID is unknown, the
+filename doesn't match the expected =TIMESTAMP-SLUG.org= shape,
+or the destination already exists."
+  (let* ((old-path (sns-roam--node-file-or-error id))
+         (dir      (file-name-directory old-path))
+         (parts    (sns-roam--split-roam-filename old-path))
+         (prefix   (car parts))
+         (new-name (concat prefix new-slug ".org"))
+         (new-path (expand-file-name new-name dir)))
+    (when (file-exists-p new-path)
+      (error "sns-roam: refusing to overwrite existing file %s" new-path))
+    (when (string= old-path new-path)
+      (error "sns-roam: new slug %S produces the same filename" new-slug))
+    (let ((buf (find-buffer-visiting old-path)))
+      (rename-file old-path new-path)
+      (when buf
+        (with-current-buffer buf
+          (set-visited-file-name new-path nil t))))
+    new-path))
+#+end_src
+
+* Mutate: rename a node (title + filename together)
+
+Composite operation: rewrite =#+title:= and rename the file's
+slug to match. Slug derivation uses org-roam's own
+=org-roam-node-slug= so the result is byte-identical to what a
+fresh capture would have produced.
+
+** Contract
+
+- *Input*:
+  - =ID= (string) — the roam UUID.
+  - =NEW-TITLE= (string) — the new title.
+- *Output*: plist =(:id ID :title NEW-TITLE :file NEW-PATH)=.
+- *Side effects*: title rewritten in file; file renamed; any
+  visiting buffer updated.
+- *Discipline*: not transactional. Title write happens first,
+  then file rename. If the rename fails (e.g. destination exists),
+  the title is already rewritten — caller can retry the rename
+  with a different slug or rename by hand. We accept this because
+  the alternative (rollback the title write) doubles the failure
+  surface for marginal benefit.
+
+** Implementation
+
+#+begin_src emacs-lisp
+(defun sns-roam-rename (id new-title)
+  "Rewrite roam node ID's title to NEW-TITLE and rename its file to match.
+
+Slug derivation uses `org-roam-node-slug' for parity with the
+capture template. Returns a plist (:id :title :file)."
+  (sns-roam-set-keyword id "TITLE" new-title)
+  (let* ((node    (org-roam-node-from-id id))
+         (_       (unless node
+                    (error "sns-roam: node %S vanished after title rewrite" id)))
+         (slug    (org-roam-node-slug node))
+         (new-path (sns-roam-rename-file id slug)))
+    (list :id id :title new-title :file new-path)))
+#+end_src
+
 * Footer
 
 #+begin_src emacs-lisp
