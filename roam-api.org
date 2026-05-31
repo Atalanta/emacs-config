@@ -66,16 +66,26 @@ tag. Returns a list of plists, one per matching node.
 
 Each result is a plist of the shape
   (:id ID :title TITLE :file FILE :tags TAGS :aliases ALIASES).
-QUERY is a string. Empty list on no match."
-  (let ((q (downcase query)))
-    (cl-loop for node in (org-roam-node-list)
-             for title    = (or (org-roam-node-title node) "")
-             for aliases  = (org-roam-node-aliases node)
-             for tags     = (org-roam-node-tags node)
-             when (or (cl-search q (downcase title))
-                      (cl-some (lambda (a) (cl-search q (downcase a))) aliases)
-                      (cl-some (lambda (tg) (cl-search q (downcase tg))) tags))
-             collect (sns-roam--node-to-plist node))))
+QUERY is a string. Empty list on no match.
+
+Deduped by :id — `org-roam-node-list' returns one entry per
+(node, alias) pair, so a node with N aliases would otherwise
+appear N+1 times."
+  (let ((q (downcase query))
+        (seen (make-hash-table :test 'equal))
+        (results nil))
+    (dolist (node (org-roam-node-list))
+      (let* ((id      (org-roam-node-id node))
+             (title   (or (org-roam-node-title node) ""))
+             (aliases (org-roam-node-aliases node))
+             (tags    (org-roam-node-tags node)))
+        (when (and (not (gethash id seen))
+                   (or (cl-search q (downcase title))
+                       (cl-some (lambda (a) (cl-search q (downcase a))) aliases)
+                       (cl-some (lambda (tg) (cl-search q (downcase tg))) tags)))
+          (puthash id t seen)
+          (push (sns-roam--node-to-plist node) results))))
+    (nreverse results)))
 #+end_src
 
 ** Discipline notes
