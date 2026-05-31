@@ -99,6 +99,102 @@ appear N+1 times."
   full-list scans hurt, we add an =:limit= keyword later — but
   silent caps are forbidden by the design discipline.
 
+* Read: expand a node (one-hop subgraph)
+
+Given a roam node ID, return the set of nodes reachable in one
+hop — both incoming (=backlinks=) and outgoing (=forward
+links=). Returned as a subgraph plist =(:nodes (...) :edges
+(...))=, never flattened, per the locked design.
+
+- =:nodes= — the unique set of source/target nodes deduped by
+  =:id=, each in the standard plist shape.
+- =:edges= — the relationships, one plist per link. Carries
+  =:source-id=, =:target-id=, =:direction= (=:forward= or
+  =:backward=), =:point= (provenance), and =:context= (the
+  outline path or surrounding text excerpt).
+
+Backlinks come from =org-roam-backlinks-get= (roam already
+indexes them). Forward links are walked with =org-ml= over the
+file's AST — roam doesn't index forward links, and per the
+design we use AST walking rather than text grep. Only =id:=
+links count as edges; fuzzy =[[X]]= autovivification
+placeholders are unresolved and don't (yet) participate in the
+graph.
+
+** Implementation
+
+#+begin_src emacs-lisp
+(defun sns-roam--backlink-edges (target-node)
+  "Return a list of backlink edge plists pointing at TARGET-NODE."
+  (mapcar
+   (lambda (bl)
+     (let ((source (org-roam-backlink-source-node bl)))
+       (list :source-id  (org-roam-node-id source)
+             :target-id  (org-roam-node-id target-node)
+             :direction  :backward
+             :point      (org-roam-backlink-point bl)
+             :context    (plist-get (org-roam-backlink-properties bl)
+                                    :outline))))
+   (org-roam-backlinks-get target-node)))
+
+(defun sns-roam--forward-link-edges (source-node)
+  "Return a list of forward-link edge plists from SOURCE-NODE.
+Only =id:= links count; fuzzy and external links are skipped."
+  (let* ((file   (org-roam-node-file source-node))
+         (parsed (with-temp-buffer
+                   (insert-file-contents file)
+                   (org-mode)
+                   (org-ml-parse-this-buffer)))
+         (links  (org-ml-match '(:any * link) parsed)))
+    (cl-loop for link in links
+             when (string= (org-ml-get-property :type link) "id")
+             collect
+             (let* ((target-id (org-ml-get-property :path link))
+                    (children (org-ml-get-children link))
+                    (text-raw (and (stringp (car-safe children))
+                                   (car children)))
+                    (text (and text-raw (substring-no-properties text-raw))))
+               (list :source-id  (org-roam-node-id source-node)
+                     :target-id  target-id
+                     :direction  :forward
+                     :point      (org-ml-get-property :begin link)
+                     :context    text)))))
+
+(defun sns-roam-expand (id)
+  "Return the one-hop subgraph around roam node ID.
+
+Result shape:
+  (:nodes (PLIST ...)
+   :edges (PLIST ...))
+
+=:nodes= contains every source/target node touched by an edge,
+deduped by =:id=, plus the centre node itself. =:edges= contains
+all backlinks (=:direction :backward=) and forward links
+(=:direction :forward=) as edge plists.
+
+Loud failure if ID has no roam node."
+  (let* ((centre (org-roam-node-from-id id))
+         (_ (unless centre (error "sns-roam: no roam node with id %S" id)))
+         (back-edges (sns-roam--backlink-edges centre))
+         (fwd-edges  (sns-roam--forward-link-edges centre))
+         (all-edges  (append back-edges fwd-edges))
+         (other-ids  (delete-dups
+                      (append (mapcar (lambda (e) (plist-get e :source-id)) back-edges)
+                              (mapcar (lambda (e) (plist-get e :target-id)) fwd-edges))))
+         (other-nodes (mapcar
+                       (lambda (oid)
+                         (let ((n (org-roam-node-from-id oid)))
+                           (if n
+                               (sns-roam--node-to-plist n)
+                             ;; unresolved id — surface a stub
+                             (list :id oid :title nil :file nil
+                                   :tags nil :aliases nil))))
+                       other-ids))
+         (centre-plist (sns-roam--node-to-plist centre)))
+    (list :nodes (cons centre-plist other-nodes)
+          :edges all-edges)))
+#+end_src
+
 * Mutate: set a file-level property
 
 Set or update a single property in the top-level =:PROPERTIES:=
