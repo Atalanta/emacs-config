@@ -280,6 +280,142 @@ Loud failure if ID has no roam node."
           :edges all-edges)))
 #+end_src
 
+* Read: excerpt the element enclosing a point
+
+Given a roam node ID and a buffer =POINT= inside its file, return
+the smallest "excerpt container" element enclosing that point —
+plus the headline ancestry leading to it. Used as the final mining
+step in the locked design's read pipeline:
+
+  1. Seed by metadata (=find-by-metadata=).
+  2. Seed by body (=body-search=) — yields hit plists with =:point=.
+  3. Expand into the graph (=expand=).
+  4. *Mine excerpts* (this function) — turn a =:point= into the
+     surrounding paragraph plus its outline path.
+  5. Synthesise (Claude's job).
+
+Pure transformation on the AST. No mutation, no buffer state.
+
+** Contract
+
+- *Input*:
+  - =ID= (string) — roam node UUID. Loud failure if unknown.
+  - =POINT= (integer) — buffer position inside the node's file.
+- *Output*: plist
+  =(:id :file :point :text :container-type :outline)=.
+  - =:text= — the serialised excerpt container (a paragraph,
+    item, quote-block, or verse-block).
+  - =:container-type= — the symbol naming the container's element
+    type. Lets a caller filter (e.g. mining quotes only).
+  - =:outline= — list of headline plists, root-to-leaf ancestry,
+    each =(:level :raw-value :tags :todo-keyword)=. Empty list
+    when POINT is in the leading section before any headline.
+- *Discipline*: loud failure if POINT has no enclosing excerpt
+  container — that means POINT landed in a headline title line,
+  a property-drawer, or somewhere structurally weird, which is a
+  bug in whatever produced the POINT.
+
+** Implementation
+
+The walk: pre-order traversal of the AST collecting every element
+whose =[:begin, :end)= window contains POINT. The result is the
+ancestry chain root-to-leaf — order is implicit in the recursion.
+Two pluckings derive =:outline= and the container from that chain.
+
+The excerpt-container set excludes =plain-list=: a list's =item=
+children are the better mining unit. A POINT in a list bullet
+gets the bullet text, not the entire list.
+
+#+begin_src emacs-lisp
+(defconst sns-roam--excerpt-container-types
+  '(paragraph item quote-block verse-block)
+  "Element types that count as excerpt containers for mining.
+Walks descend past =plain-list= to its =item= children — the item
+is the better excerpt unit than the whole list.")
+
+(defun sns-roam--element-contains-point-p (element point)
+  "Return non-nil if POINT lies within ELEMENT's [:begin, :end) window."
+  (let ((b (org-ml-get-property :begin element))
+        (e (org-ml-get-property :end element)))
+    (and b e (<= b point) (< point e))))
+
+(defun sns-roam--ancestry-at-point (root point)
+  "Return the ancestry chain of elements containing POINT under ROOT.
+Result is root-to-leaf, including ROOT when it contains POINT.
+Each element appears once. Pure: no buffer state, no mutation."
+  (when (sns-roam--element-contains-point-p root point)
+    (cons root
+          (cl-loop for child in (org-ml-get-children root)
+                   for sub = (and (listp child)
+                                  (sns-roam--ancestry-at-point child point))
+                   when sub return sub))))
+
+(defun sns-roam--headline-to-plist (h)
+  "Convert headline AST node H into a plist for Claude."
+  (list :level         (org-ml-get-property :level h)
+        :raw-value     (org-ml-get-property :raw-value h)
+        :tags          (org-ml-get-property :tags h)
+        :todo-keyword  (org-ml-get-property :todo-keyword h)))
+
+(defun sns-roam-excerpt (id point)
+  "Return the excerpt container enclosing POINT in roam node ID's file.
+
+Result shape:
+  (:id ID
+   :file FILE
+   :point POINT
+   :text TEXT
+   :container-type SYMBOL
+   :outline (HEADLINE-PLIST ...))
+
+Loud failure if ID is unknown or POINT has no enclosing excerpt
+container (=paragraph= / =item= / =quote-block= / =verse-block=).
+The latter usually means POINT landed in a headline title line or
+a property drawer — fix the upstream caller."
+  (let* ((file    (sns-roam--node-file-or-error id))
+         (root    (with-temp-buffer
+                    (insert-file-contents file)
+                    (org-mode)
+                    (org-ml-parse-this-buffer)))
+         (chain   (sns-roam--ancestry-at-point root point))
+         (outline (cl-loop for el in chain
+                           when (org-ml-is-type 'headline el)
+                           collect (sns-roam--headline-to-plist el)))
+         (container
+          (cl-loop for el in (reverse chain)
+                   when (memq (org-ml-get-type el)
+                              sns-roam--excerpt-container-types)
+                   return el)))
+    (unless container
+      (error "sns-roam: point %d in %s has no enclosing excerpt container"
+             point file))
+    (list :id              id
+          :file            file
+          :point           point
+          :text            (string-trim (org-ml-to-string container))
+          :container-type  (org-ml-get-type container)
+          :outline         outline)))
+#+end_src
+
+** Discipline notes
+
+- *One walk, two pluckings.* =sns-roam--ancestry-at-point= produces
+  the full root-to-leaf chain; =:outline= and the container are
+  filters over that single result. Resist the temptation to write
+  separate "find headlines" and "find paragraph" walkers — they'd
+  duplicate the recursion and drift apart over time.
+- *Loud failure when POINT has no container.* A property drawer or
+  a headline title line is a sign that the upstream =:point= was
+  built wrong (e.g. body-search hit something it shouldn't have).
+  Surfacing the bug is more valuable than returning =nil=.
+- *=plain-list= deliberately excluded from containers.* A user
+  searching for text inside a bullet wants the bullet, not the
+  whole list. Items nest cleanly; lists don't.
+- *Predicate as data.* =sns-roam--excerpt-container-types= is a
+  defconst, not buried in an =or= chain. Easy to extend (add
+  =example-block= for code excerpts later) without touching the
+  walk.
+
 * Mutate: set a file-level property
 
 Set or update a single property in the top-level =:PROPERTIES:=
