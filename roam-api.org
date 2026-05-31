@@ -1,0 +1,97 @@
+#+TITLE: Roam API — Claude bridge into the slipbox
+#+AUTHOR: SNS
+#+PROPERTY: header-args:emacs-lisp :tangle "sns-emacs-modules/sns-roam-api.el" :mkdirp yes :results silent
+
+* Overview
+
+Lisp-native bridge that lets Claude read (and eventually write) the
+=org-roam= slipbox. The contract is plist-shaped s-expressions
+between Emacs and Claude — no JSON, no XML.
+
+Two-layer split:
+- *Roam API* (=org-roam-node-list=, =org-roam-node-from-id=,
+  =org-roam-backlinks-get=) for graph metadata and traversal.
+- *org-ml* for body content / excerpts / structural edits (write
+  side, later).
+
+This file tangles to =sns-emacs-modules/sns-roam-api.el= and is
+loaded via =(require 'sns-roam-api)= in =init.el=. Tangle with:
+
+#+begin_src sh :tangle no
+emacs --batch --load org --eval '(org-babel-tangle-file "roam-api.org")'
+#+end_src
+
+* Header
+
+Library header and dependencies. =org-roam= is already pulled in by
+=sns-knowledge-base=; we just reference its API here.
+
+#+begin_src emacs-lisp
+;;; sns-roam-api.el --- Lisp bridge into the org-roam slipbox -*- lexical-binding: t; -*-
+;;
+;; This file is generated from roam-api.org. Do not edit directly.
+;;
+;;; Code:
+
+(require 'org-roam)
+(require 'cl-lib)
+#+end_src
+
+* Seed: find by metadata
+
+The cheapest, highest-recall seed operation. Filter
+=org-roam-node-list= by substring match against title, alias, or
+tag. Returns a list of plists, one per matching node.
+
+** Contract
+
+- *Input*: a query string (case-insensitive substring).
+- *Output*: list of plists =(:id :title :file :tags :aliases)=.
+  Empty list on no match. Never =nil=-pollutes a field — missing
+  tags / aliases come back as =nil=.
+
+** Implementation
+
+#+begin_src emacs-lisp
+(defun sns-roam--node-to-plist (node)
+  "Convert an `org-roam-node' NODE into a plist for Claude."
+  (list :id       (org-roam-node-id node)
+        :title    (org-roam-node-title node)
+        :file     (org-roam-node-file node)
+        :tags     (org-roam-node-tags node)
+        :aliases  (org-roam-node-aliases node)))
+
+(defun sns-roam-find-by-metadata (query)
+  "Return roam nodes whose title, alias, or tag matches QUERY (substring, case-insensitive).
+
+Each result is a plist of the shape
+  (:id ID :title TITLE :file FILE :tags TAGS :aliases ALIASES).
+QUERY is a string. Empty list on no match."
+  (let ((q (downcase query)))
+    (cl-loop for node in (org-roam-node-list)
+             for title    = (or (org-roam-node-title node) "")
+             for aliases  = (org-roam-node-aliases node)
+             for tags     = (org-roam-node-tags node)
+             when (or (cl-search q (downcase title))
+                      (cl-some (lambda (a) (cl-search q (downcase a))) aliases)
+                      (cl-some (lambda (tg) (cl-search q (downcase tg))) tags))
+             collect (sns-roam--node-to-plist node))))
+#+end_src
+
+** Discipline notes
+
+- *Plist returns, always.* Per [[file:~/.claude/projects/-Users-stephen-nelsonsmith-Developer-aldi-compass/memory/roam_claude_design.md][roam-claude-design]]: no opaque
+  =org-roam-node= structs leak across the API boundary. Claude
+  reads plists, full stop.
+- *Provenance baked in.* =:id= and =:file= ride along on every
+  result so excerpts and citations are mechanical.
+- *No truncation.* If the slipbox grows past the point where
+  full-list scans hurt, we add an =:limit= keyword later — but
+  silent caps are forbidden by the design discipline.
+
+* Footer
+
+#+begin_src emacs-lisp
+(provide 'sns-roam-api)
+;;; sns-roam-api.el ends here
+#+end_src
