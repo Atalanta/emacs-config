@@ -99,6 +99,91 @@ appear N+1 times."
   full-list scans hurt, we add an =:limit= keyword later — but
   silent caps are forbidden by the design discipline.
 
+* Read: search note bodies
+
+Substring search (case-insensitive) over the body text of every
+=.org= file in =org-roam-directory=. Used as a seed step when
+the query phrase isn't in any node's title, alias, or tag — per
+the locked design's pipeline:
+
+  1. Seed by metadata (=find-by-metadata=).
+  2. *Seed by body* (this function).
+  3. Expand into the graph (=expand=).
+  4. Mine excerpts (=excerpt=, future).
+
+Returned as a flat list of *hit* plists, one per match (a file
+with three matches yields three results). Each hit carries:
+
+- =:id= — the roam node UUID for the file (looked up via
+  =org-id-get= at point 1).
+- =:title=, =:file= — node identity from the roam DB.
+- =:line= — 1-indexed line number.
+- =:point= — buffer position of the match (suitable for
+  =goto-char=).
+- =:hit-text= — the whole line containing the match, trimmed.
+
+The property drawer at the top of each file (=:ID:= UUID and
+friends) is skipped so a search for a UUID-looking string
+doesn't return every node. We do this by skipping until past
+=#+title:=.
+
+** Implementation
+
+#+begin_src emacs-lisp
+(defun sns-roam--skip-header ()
+  "Move point past the file's =:PROPERTIES:= drawer and =#+title:= line.
+Stays at point 1 if no header found. Cheap heuristic: search
+forward for =#+title:=, move to the line after; otherwise leave
+point at the start of buffer."
+  (goto-char (point-min))
+  (when (re-search-forward "^#\\+title:.*\n" nil t)
+    (goto-char (match-end 0))))
+
+(defun sns-roam--search-file (file query)
+  "Return a list of hit plists for QUERY in FILE.
+Empty list if no hits or file isn't a roam node."
+  (let ((re (regexp-quote query))
+        (case-fold-search t)
+        (hits nil))
+    (with-temp-buffer
+      (insert-file-contents file)
+      (let ((id (org-with-point-at 1 (org-id-get))))
+        (when id
+          (let* ((node (org-roam-node-from-id id))
+                 (title (when node (org-roam-node-title node))))
+            (sns-roam--skip-header)
+            (while (re-search-forward re nil t)
+              (let* ((point (match-beginning 0))
+                     (line  (line-number-at-pos point))
+                     (line-text
+                      (string-trim
+                       (buffer-substring-no-properties
+                        (line-beginning-position)
+                        (line-end-position)))))
+                (push (list :id id
+                            :title title
+                            :file file
+                            :line line
+                            :point point
+                            :hit-text line-text)
+                      hits)))))))
+    (nreverse hits)))
+
+(defun sns-roam-body-search (query)
+  "Return all body-text matches for QUERY across the roam slipbox.
+
+Each result is a plist of the shape
+  (:id ID :title TITLE :file FILE :line LINE :point POINT :hit-text TEXT).
+
+Substring match, case-insensitive. The =:PROPERTIES:= drawer
+and =#+title:= line are skipped so UUID/keyword noise doesn't
+match. Files without an =:ID:= property drawer (i.e. not a roam
+node) are skipped silently. Empty list on no match."
+  (let ((files (directory-files-recursively
+                org-roam-directory "\\.org\\'")))
+    (cl-mapcan (lambda (f) (sns-roam--search-file f query)) files)))
+#+end_src
+
 * Read: expand a node (one-hop subgraph)
 
 Given a roam node ID, return the set of nodes reachable in one
