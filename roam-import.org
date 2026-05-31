@@ -201,32 +201,59 @@ unresolved slugs but does not error."
 
 ** Create node
 
-The single side-effecting stage. =create-node= writes the file
-via =sns-roam-create-node=, passing aliases through so they land
-in the property drawer at write time. No second pass — the
-just-written node need not be re-opened to set =:ROAM_ALIASES:=,
-which kept the importer wedged on org-roam's DB lookup before
-autosync had indexed the new file.
+The single side-effecting stage. =create-node= parses the
+pandoc-emitted org body into an AST and hands it to
+=sns-roam-create-node=, which builds the file end-to-end via
+org-ml. Aliases are passed through so they land in the property
+drawer at write time — no second pass over the just-written
+file.
+
+The AST conversion flattens the parsed =org-data= node into the
+list of elements =sns-roam-create-node= expects: the leading
+section's children (paragraphs etc.) followed by any sibling
+headlines. =sns-roam-create-node= re-splits them on its end
+into "section children" (drawer + keyword + paragraphs) and
+"sibling headlines"; the round-trip survives because that's
+exactly the structure org-mode itself imposes.
 
 #+begin_src emacs-lisp
+(defun sns-roam-import--parse-body-elements (org-body)
+  "Parse ORG-BODY (a string of org-formatted text) into a flat list
+of org-ml AST nodes suitable for `sns-roam-create-node'.
+
+The leading section's paragraph-ish children are unwrapped (so
+they go into our header section); any sibling headlines pass
+through untouched."
+  (let* ((parsed (with-temp-buffer
+                   (insert org-body)
+                   (org-ml-parse-this-buffer)))
+         (children (org-ml-get-children parsed)))
+    (cl-mapcan (lambda (child)
+                 (if (eq (org-ml-get-type child) 'section)
+                     (org-ml-get-children child)
+                   (list child)))
+               children)))
+
 (defun sns-roam-import--create-node (input)
   "Create a roam node from INPUT, returning (:id :title :file :aliases).
-Body comes from =:org-body=; KIND is hard-coded =permanent= for
-imports — the corpus we're importing is by definition the
-distilled, atomic kind. If INPUT has a pre-assigned =:id=, it's
-used verbatim; otherwise =sns-roam-create-node= generates one.
-Aliases are passed through to =sns-roam-create-node= so the
-property drawer is written with =:ROAM_ALIASES:= included from
-the start. Threading the pre-assigned ID through is what makes
-the two-pass vault import work (wikilinks resolve to the same
-UUIDs the map promised)."
-  (let* ((aliases (plist-get input :aliases))
-         (created (sns-roam-create-node
-                   (plist-get input :title)
-                   "permanent"
-                   (plist-get input :org-body)
-                   (plist-get input :id)
-                   aliases)))
+Body comes from =:org-body= (parsed into AST); KIND is hard-coded
+=permanent= for imports — the corpus we're importing is by
+definition the distilled, atomic kind. If INPUT has a
+pre-assigned =:id=, it's used verbatim; otherwise
+=sns-roam-create-node= generates one. Aliases are passed
+through so the property drawer is written with =:ROAM_ALIASES:=
+included from the start. Threading the pre-assigned ID through
+is what makes the two-pass vault import work (wikilinks resolve
+to the same UUIDs the map promised)."
+  (let* ((aliases  (plist-get input :aliases))
+         (elements (sns-roam-import--parse-body-elements
+                    (plist-get input :org-body)))
+         (created  (sns-roam-create-node
+                    (plist-get input :title)
+                    "permanent"
+                    elements
+                    (plist-get input :id)
+                    aliases)))
     (append created (list :aliases aliases))))
 #+end_src
 

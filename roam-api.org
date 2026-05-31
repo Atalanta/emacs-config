@@ -483,18 +483,26 @@ of the bridge primitives.
     "fleeting", or any other string the caller treats as a kind.
     No validation — caller's responsibility to use a recognised
     value. (Validation belongs in a higher layer if at all.)
-  - =BODY= (string, optional) — initial body content. Empty if
-    not supplied.
+  - =ELEMENTS= (list of org-ml AST nodes, optional) — body
+    content as pre-built AST. Each element is something
+    =org-ml-build-*= produced (paragraph, headline, plain-list,
+    etc.). Pass =nil= for an empty-body node. Callers building
+    from a string of pre-formatted org should parse it via
+    =org-ml-parse-this-buffer= first; see the importer for the
+    canonical pattern.
   - =ID= (string, optional) — pre-assigned UUID. If absent, a
     fresh one is generated via =org-id-new=. The importer uses
     this to honour a slug→UUID map computed before any files
     exist; the capture-template case omits it.
+  - =ALIASES= (list of strings, optional) — written as
+    =:ROAM_ALIASES:= in the property drawer when non-empty.
 - *Output*: plist =(:id ID :title TITLE :file PATH)=.
 - *Side effects*:
-  - New file written under =org-roam-directory=.
-  - Org-roam DB picks up the node automatically (the file is saved
-    via =save-buffer=, which triggers =org-roam-db-autosync-mode='s
-    after-save hook).
+  - New file written under =org-roam-directory= via
+    =write-region= over a =with-temp-buffer=. The file is never
+    visited as a buffer; org-roam's autosync hook is bypassed,
+    and the new node will be picked up on org-roam's next index
+    refresh.
 - *Discipline*:
   - Errors loudly if the destination file already exists. Do not
     overwrite — collisions almost certainly mean a bug.
@@ -518,41 +526,55 @@ matching the capture template's =%U= output (e.g. \"[2026-05-31 Sun 09:14]\")."
   "Return the current time as a 14-digit YYYYMMDDhhmmss prefix."
   (format-time-string "%Y%m%d%H%M%S"))
 
-(defun sns-roam-create-node (title kind &optional body id aliases)
+(defun sns-roam--build-header-properties (id created kind aliases)
+  "Return the list of =node-property= elements for a roam header.
+ALIASES is a list of strings; when non-empty an extra
+=ROAM_ALIASES= property is appended."
+  (let ((base (list (org-ml-build-node-property "ID" id)
+                    (org-ml-build-node-property "CREATED" created)
+                    (org-ml-build-node-property "KIND" kind))))
+    (if aliases
+        (append base
+                (list (org-ml-build-node-property
+                       "ROAM_ALIASES"
+                       (mapconcat (lambda (a) (format "\"%s\"" a))
+                                  aliases " "))))
+      base)))
+
+(defun sns-roam-create-node (title kind &optional elements id aliases)
   "Create a new roam node with TITLE and KIND, returning a plist.
 
 Slugifies TITLE for the filename, writes the file under
 `org-roam-directory' with the standard roam header (:ID,
-:CREATED, :KIND, optional :ROAM_ALIASES:, #+title), and an
-optional BODY string. If ID is nil, generates a fresh UUID via
-`org-id-new'; otherwise uses the caller's value verbatim.
-ALIASES is an optional list of strings; when non-empty, written
-as :ROAM_ALIASES: per org-roam convention. Returns
+:CREATED, :KIND, optional :ROAM_ALIASES:, #+title) followed by
+ELEMENTS — a list of org-ml AST nodes forming the body. ID, if
+nil, is freshly generated via `org-id-new'. ALIASES is an
+optional list of strings; when non-empty written as
+:ROAM_ALIASES: per org-roam convention. Returns
 (:id :title :file). Errors if the destination already exists."
-  (let* ((id        (or id (org-id-new)))
-         (slug      (org-roam-node-slugify title))
-         (prefix    (sns-roam--current-filename-timestamp))
-         (filename  (concat prefix "-" slug ".org"))
-         (path      (expand-file-name filename org-roam-directory))
-         (created   (sns-roam--current-org-timestamp))
-         (body-text (or body ""))
-         (normalised (if (or (string-empty-p body-text)
-                             (string-suffix-p "\n" body-text))
-                         body-text
-                       (concat body-text "\n")))
-         (aliases-line (when aliases
-                         (concat ":ROAM_ALIASES: "
-                                 (mapconcat (lambda (a) (format "\"%s\"" a))
-                                            aliases " ")
-                                 "\n")))
-         (content   (concat ":PROPERTIES:\n"
-                            ":ID:       " id "\n"
-                            ":CREATED:  " created "\n"
-                            ":KIND:     " kind "\n"
-                            (or aliases-line "")
-                            ":END:\n"
-                            "#+title: " title "\n"
-                            normalised)))
+  (let* ((id       (or id (org-id-new)))
+         (slug     (org-roam-node-slugify title))
+         (prefix   (sns-roam--current-filename-timestamp))
+         (filename (concat prefix "-" slug ".org"))
+         (path     (expand-file-name filename org-roam-directory))
+         (created  (sns-roam--current-org-timestamp))
+         (props    (sns-roam--build-header-properties id created kind aliases))
+         (drawer   (apply #'org-ml-build-property-drawer props))
+         (kw       (org-ml-build-keyword "title" title))
+         ;; Split ELEMENTS into the leading paragraph-ish section
+         ;; children (which co-exist with drawer + keyword in a single
+         ;; section) and the trailing headlines (which sit as siblings).
+         (split-pos (or (cl-position-if
+                         (lambda (e) (eq (org-ml-get-type e) 'headline))
+                         elements)
+                        (length elements)))
+         (section-children (cl-subseq elements 0 split-pos))
+         (sibling-headlines (cl-subseq elements split-pos))
+         (section  (apply #'org-ml-build-section
+                          (append (list drawer kw) section-children)))
+         (content  (mapconcat #'org-ml-to-string
+                              (cons section sibling-headlines)
+                              "")))
     (when (file-exists-p path)
       (error "sns-roam: refusing to overwrite existing file %s" path))
     (with-temp-buffer
@@ -568,10 +590,24 @@ as :ROAM_ALIASES: per org-roam convention. Returns
   =:created= and =:filename-prefix= keyword args. Resist
   conflating it with =create-node= — different intent, different
   failure modes.
-- *Header written as text, not via =org-ml-build-*=.* The header
-  shape is fixed; rebuilding it through AST nodes adds parse →
-  serialise round-trip cost for no benefit. Reads from the file
-  afterwards happen via org-ml as usual.
+- *AST in, file out.* The whole point of choosing org over text
+  formats is that the AST is the substrate. Callers hand over
+  pre-built =org-ml-build-*= nodes; the function builds the
+  header AST itself and hands the union to =org-ml-to-string=.
+  No string templating in the body. Callers with a string of
+  pre-formatted org (the importer, fed by pandoc) parse via
+  =org-ml-parse-this-buffer= and pass the parsed children — see
+  the importer for the canonical pattern.
+- *Section vs sibling-headline split.* The =:PROPERTIES:= drawer
+  and =#+title:= keyword live inside the file's leading
+  =section= element. Body paragraphs and lists belong in that
+  same section. Top-level headlines (=*=) are siblings, not
+  children. The function sorts ELEMENTS into those two buckets
+  on the assumption that paragraphs precede the first headline —
+  if a caller intersperses paragraphs after a headline, those
+  paragraphs become children of that headline (not the leading
+  section), which is what org's structure says they should be
+  anyway.
 - *Caller passes KIND as a string.* No enum, no validation. The
   taxonomy lives in the user's head, and a single typo in the
   value should be visible in the file rather than rejected at
