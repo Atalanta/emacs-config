@@ -121,8 +121,13 @@ Errors loudly if no title is found — every roam node needs one."
 Shell out to =pandoc= with the four flags that do most of the
 clean-up:
 
-- =markdown+wikilinks_title_after_pipe-auto_identifiers= —
-  parse =[[X|Y]]= wikilinks; suppress =:CUSTOM_ID:= drawers.
+- Reader: =markdown+wikilinks_title_after_pipe-auto_identifiers-smart= —
+  parse =[[X|Y]]= wikilinks; suppress =:CUSTOM_ID:= drawers;
+  disable curly-quote conversion on input.
+- Writer: =org-special_strings= — keep real em-dash characters
+  (=—=) in the output instead of converting them to org's =---=
+  shortcut. Source markdown already uses the right characters;
+  no point round-tripping them through ASCII shortcuts.
 - =--shift-heading-level-by=-1= — drop the H1 (which duplicated
   =#+title:= anyway) and demote everything else.
 - =--wrap=preserve= — no line-rewrapping; preserves authored
@@ -141,8 +146,8 @@ Errors if pandoc exits non-zero."
     (let ((exit (let ((coding-system-for-write 'utf-8))
                   (call-process-region
                    markdown nil "pandoc" nil t nil
-                   "-f" "markdown+wikilinks_title_after_pipe-auto_identifiers"
-                   "-t" "org"
+                   "-f" "markdown+wikilinks_title_after_pipe-auto_identifiers-smart"
+                   "-t" "org-special_strings"
                    "--shift-heading-level-by=-1"
                    "--wrap=preserve"))))
       (unless (eq exit 0)
@@ -167,36 +172,67 @@ We use the title from YAML directly to avoid mismatch surprises."
 
 ** Rewrite wikilinks
 
-Pandoc emits =[[file:SLUG][TEXT]]= for every Obsidian wikilink.
-Replace each with =[[id:UUID][TEXT]]= when the slug is in
-UUID-MAP; leave others untouched (loud log) — they point at
-notes outside the import set, and the user must resolve those
-by hand.
+Pandoc emits =file:= links for every Obsidian wikilink. We
+walk the parsed AST (post =parse-body-elements=) and rewrite
+each link element structurally — no regex over pandoc's text.
+
+- Resolved slug (in UUID-MAP) → =[[id:UUID][TEXT]]=.
+- Unresolved slug → =[[TEXT]]=, a fuzzy roam-resolvable link
+  that preserves Obsidian's autovivification semantics (the
+  link declares "this note should exist someday"; roam
+  resolves it the moment a node with matching title or alias
+  is created).
+- Non-file links (=id:=, =https:=, etc.) pass through.
+
+When the original Obsidian link had no display text
+(=[[wikilinks]]=), pandoc emits a bare =[[file:wikilinks]]=
+with no children; we use the slug as the fuzzy link target
+and omit the display text. When display text differs from
+slug we keep the slug as link target and the text as display.
 
 #+begin_src emacs-lisp
-(defun sns-roam-import--rewrite-wikilinks-in (org-body uuid-map)
-  "Return ORG-BODY with =[[file:SLUG][TEXT]]= rewritten via UUID-MAP.
-UUID-MAP is an alist ((SLUG . UUID) ...). Logs a warning for
-unresolved slugs but does not error."
-  (replace-regexp-in-string
-   "\\[\\[file:\\([^]]+\\)\\]\\[\\([^]]+\\)\\]\\]"
-   (lambda (match)
-     (let* ((slug (match-string 1 match))
-            (text (match-string 2 match))
-            (uuid (cdr (assoc slug uuid-map))))
-       (if uuid
-           (format "[[id:%s][%s]]" uuid text)
-         (warn "sns-roam-import: unresolved wikilink slug %S; left as-is" slug)
-         match)))
-   org-body t))
+(defun sns-roam-import--rewrite-link-ast (link uuid-map)
+  "Return a rewritten LINK element if it's a file: link, else LINK unchanged.
+Preserves =:post-blank= from the original so trailing whitespace
+between the link and following text isn't dropped on re-emit
+(otherwise =[[…]] foo= becomes =[[…]]foo=)."
+  (if (string= (org-ml-get-property :type link) "file")
+      (let* ((slug     (org-ml-get-property :path link))
+             (children (org-ml-get-children link))
+             (text     (and (stringp (car-safe children))
+                            (car children)))
+             (uuid     (cdr (assoc slug uuid-map)))
+             (post-blank (org-ml-get-property :post-blank link))
+             (rebuilt (cond
+                       (uuid (org-ml-build-link (concat "id:" uuid)
+                                                (or text slug)))
+                       ((and text (not (string= text slug)))
+                        (org-ml-build-link slug text))
+                       (t (org-ml-build-link (or text slug))))))
+        (org-ml-set-property :post-blank post-blank rebuilt))
+    link))
+
+(defun sns-roam-import--rewrite-wikilinks-ast (elements uuid-map)
+  "Return ELEMENTS (list of org-ml AST nodes) with file: links rewritten.
+Each top-level element's link descendants are rewritten via
+`sns-roam-import--rewrite-link-ast'."
+  (mapcar
+   (lambda (element)
+     (org-ml-match-map
+      '(:any * link)
+      (lambda (l) (sns-roam-import--rewrite-link-ast l uuid-map))
+      element))
+   elements))
 
 (defun sns-roam-import--rewrite-wikilinks (uuid-map)
-  "Return a stage function that rewrites wikilinks using UUID-MAP."
+  "Return a stage function that rewrites wikilinks (AST stage).
+Reads =:elements= from input plist, rewrites file: links via
+UUID-MAP, writes the result back to =:elements=."
   (lambda (input)
-    (let ((rewritten (sns-roam-import--rewrite-wikilinks-in
-                      (plist-get input :org-body)
+    (let ((rewritten (sns-roam-import--rewrite-wikilinks-ast
+                      (plist-get input :elements)
                       uuid-map)))
-      (plist-put (copy-sequence input) :org-body rewritten))))
+      (plist-put (copy-sequence input) :elements rewritten))))
 #+end_src
 
 ** Create node
@@ -217,7 +253,7 @@ into "section children" (drawer + keyword + paragraphs) and
 exactly the structure org-mode itself imposes.
 
 #+begin_src emacs-lisp
-(defun sns-roam-import--parse-body-elements (org-body)
+(defun sns-roam-import--parse-body-elements-from-string (org-body)
   "Parse ORG-BODY (a string of org-formatted text) into a flat list
 of org-ml AST nodes suitable for `sns-roam-create-node'.
 
@@ -234,9 +270,20 @@ through untouched."
                    (list child)))
                children)))
 
+(defun sns-roam-import--parse-body-elements (input)
+  "Pipeline stage: parse INPUT plist's =:org-body= into =:elements=.
+Drops =:org-body= from the output plist; downstream stages work
+on the AST list under =:elements=."
+  (let ((elements (sns-roam-import--parse-body-elements-from-string
+                   (plist-get input :org-body))))
+    (append (list :elements elements)
+            (cl-loop for (k v) on input by #'cddr
+                     unless (eq k :org-body)
+                     append (list k v)))))
+
 (defun sns-roam-import--create-node (input)
   "Create a roam node from INPUT, returning (:id :title :file :aliases).
-Body comes from =:org-body= (parsed into AST); KIND is hard-coded
+Body comes from =:elements= (already AST). KIND is hard-coded
 =permanent= for imports — the corpus we're importing is by
 definition the distilled, atomic kind. If INPUT has a
 pre-assigned =:id=, it's used verbatim; otherwise
@@ -245,15 +292,13 @@ through so the property drawer is written with =:ROAM_ALIASES:=
 included from the start. Threading the pre-assigned ID through
 is what makes the two-pass vault import work (wikilinks resolve
 to the same UUIDs the map promised)."
-  (let* ((aliases  (plist-get input :aliases))
-         (elements (sns-roam-import--parse-body-elements
-                    (plist-get input :org-body)))
-         (created  (sns-roam-create-node
-                    (plist-get input :title)
-                    "permanent"
-                    elements
-                    (plist-get input :id)
-                    aliases)))
+  (let* ((aliases (plist-get input :aliases))
+         (created (sns-roam-create-node
+                   (plist-get input :title)
+                   "permanent"
+                   (plist-get input :elements)
+                   (plist-get input :id)
+                   aliases)))
     (append created (list :aliases aliases))))
 #+end_src
 
@@ -285,6 +330,7 @@ plist (:id :title :file :aliases)."
   (thread-last (sns-roam-import--read-source path)
                (sns-roam-import--parse-yaml)
                (sns-roam-import--pandoc)
+               (sns-roam-import--parse-body-elements)
                (funcall (sns-roam-import--rewrite-wikilinks uuid-map))
                ((lambda (input) (sns-roam-import--inject-id input pre-assigned-id)))
                (sns-roam-import--create-node)))
