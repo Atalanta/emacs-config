@@ -823,6 +823,16 @@ of the bridge primitives.
     exist; the capture-template case omits it.
   - =ALIASES= (list of strings, optional) — written as
     =:ROAM_ALIASES:= in the property drawer when non-empty.
+  - =CREATED-TIME= (emacs internal time value, optional) — when
+    non-nil, used in place of =current-time= for both the
+    =:CREATED:= property and the filename's 14-digit prefix.
+    The two outputs are formatted from the *same* time value, so
+    they're guaranteed consistent. Pass an internal time value
+    (e.g. from =current-time=, =encode-time=,
+    =parse-iso8601-time-string=) — never a pre-formatted string.
+    The importer threads a derived creation time here so imported
+    notes preserve their authored timestamps; capture-template
+    callers omit it and get =now=.
 - *Output*: plist =(:id ID :title TITLE :file PATH)=.
 - *Side effects*:
   - New file written under =org-roam-directory= via
@@ -835,23 +845,29 @@ of the bridge primitives.
     overwrite — collisions almost certainly mean a bug.
   - Slug derived from TITLE via =org-roam-node-slugify= for
     parity with the capture template.
-  - Timestamp prefix uses =current-time= at call site (the file
-    is created *now*; pre-dating an import is a separate
-    primitive if we ever need it).
+  - Timestamp prefix uses =current-time= at call site by default;
+    callers passing CREATED-TIME override both the prefix and the
+    drawer property so an imported note preserves its authored
+    date end-to-end. The two timestamp shapes are formatted from
+    the same internal time value via =format-time-string= — no
+    string round-trips, no regex re-parsing.
   - =:CREATED:= property set to =[YYYY-MM-DD Day HH:MM]= matching
     the capture template's =%U= form.
 
 ** Implementation
 
 #+begin_src emacs-lisp
-(defun sns-roam--current-org-timestamp ()
-  "Return the current time as an inactive Org timestamp string,
-matching the capture template's =%U= output (e.g. \"[2026-05-31 Sun 09:14]\")."
-  (format-time-string "[%Y-%m-%d %a %H:%M]"))
+(defun sns-roam--org-timestamp-of (time)
+  "Return TIME as an inactive Org timestamp string,
+matching the capture template's =%U= output (e.g. \"[2026-05-31 Sun 09:14]\").
+TIME is an emacs internal time value (as produced by
+`current-time', `encode-time', `parse-iso8601-time-string', etc.)."
+  (format-time-string "[%Y-%m-%d %a %H:%M]" time))
 
-(defun sns-roam--current-filename-timestamp ()
-  "Return the current time as a 14-digit YYYYMMDDhhmmss prefix."
-  (format-time-string "%Y%m%d%H%M%S"))
+(defun sns-roam--filename-prefix-of (time)
+  "Return TIME as a 14-digit YYYYMMDDhhmmss filename prefix.
+TIME is an emacs internal time value."
+  (format-time-string "%Y%m%d%H%M%S" time))
 
 (defun sns-roam--build-header-properties (id created kind aliases)
   "Return the list of =node-property= elements for a roam header.
@@ -868,7 +884,7 @@ ALIASES is a list of strings; when non-empty an extra
                                   aliases " "))))
       base)))
 
-(defun sns-roam-create-node (title kind &optional elements id aliases)
+(defun sns-roam-create-node (title kind &optional elements id aliases created-time)
   "Create a new roam node with TITLE and KIND, returning a plist.
 
 Slugifies TITLE for the filename, writes the file under
@@ -877,14 +893,18 @@ Slugifies TITLE for the filename, writes the file under
 ELEMENTS — a list of org-ml AST nodes forming the body. ID, if
 nil, is freshly generated via `org-id-new'. ALIASES is an
 optional list of strings; when non-empty written as
-:ROAM_ALIASES: per org-roam convention. Returns
+:ROAM_ALIASES: per org-roam convention. CREATED-TIME, if
+non-nil, is an emacs internal time value used in place of
+`current-time' for both the :CREATED: property and the
+filename's 14-digit prefix; both outputs are formatted from the
+same time value via `format-time-string'. Returns
 (:id :title :file). Errors if the destination already exists."
   (let* ((id       (or id (org-id-new)))
          (slug     (org-roam-node-slugify title))
-         (prefix   (sns-roam--current-filename-timestamp))
+         (prefix   (sns-roam--filename-prefix-of created-time))
          (filename (concat prefix "-" slug ".org"))
          (path     (expand-file-name filename org-roam-directory))
-         (created  (sns-roam--current-org-timestamp))
+         (created  (sns-roam--org-timestamp-of created-time))
          (props    (sns-roam--build-header-properties id created kind aliases))
          (drawer   (apply #'org-ml-build-property-drawer props))
          (kw       (org-ml-build-keyword "title" title))
