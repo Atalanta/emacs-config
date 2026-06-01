@@ -29,9 +29,12 @@ state.
 
 #+begin_example
 md-path → :read-source       → (:yaml :body :path)
-       → :parse-yaml         → (:title :aliases :body :path)
-       → :pandoc             → (:title :aliases :org-body :path)
-       → :rewrite-wikilinks  → (:title :aliases :org-body :path)
+       → :parse-yaml         → (:yaml-title :yaml-aliases :yaml-date :body :path)
+       → :derive-title       → (:title :title-source :…)
+       → :derive-created     → (:created-time :created-source :…)
+       → :pandoc             → (:org-body :…)
+       → :parse-body-elements → (:elements :…)
+       → :rewrite-wikilinks  → (:elements :…)
        → :create-node        → (:id :title :file :aliases)
 #+end_example
 
@@ -39,6 +42,30 @@ The driver =sns-roam-import-from-markdown= threads these via
 =thread-last= and returns the final plist. Two-pass orchestration
 (slug→UUID map built in a first pass) lives in
 =sns-roam-import-vault=.
+
+*** Two-stage discipline: import liberally, mark conservatively, promote deliberately
+
+The importer's job is to produce a *structurally valid* roam node
+from arbitrary markdown — not to judge whether that node deserves
+to exist. Every imported file:
+
+- Gets a UUID (always — minted at import).
+- Gets a title (cascade: yaml =title:= → first H1 from pandoc AST
+  → filename slug humanised — never errors).
+- Gets a CREATED time (cascade: yaml =date:= → magit first-touch
+  → import-time — never errors).
+- Gets =:KIND: imported= verbatim. Always. The importer never
+  trusts foreign =kind:= metadata; promoting an imported node to
+  =permanent= is a *curation* act, performed downstream against
+  the atomic-notes heuristic.
+
+This separation buys clean composition: =roam-distill= (future)
+can walk =:KIND: imported= as a triage queue without the importer
+having pre-judged anything.
+
+The cascade decisions are logged via =message= so vault hygiene
+issues (a file falling back to filename-slug, a file with no
+discoverable creation date) are visible without being noisy.
 
 * Header
 
@@ -91,9 +118,18 @@ and =:body= is the whole file."
 
 ** Parse YAML
 
-Extract =title= and =aliases= using =yaml.el= — a real YAML
-parser, not a regex. Tags and =type= are deliberately ignored:
-vault-local labels don't carry meaning into a general slipbox.
+Extract =title=, =aliases=, and =date= using =yaml.el= — a real
+YAML parser, not a regex. Tags, =type=, and =kind= are
+deliberately ignored: vault-local labels don't carry meaning into
+this slipbox, and =kind= in particular is *never* honoured — see
+the discipline notes for why.
+
+This stage no longer errors on missing fields. It extracts what
+it can find and writes the results under =:yaml-title=,
+=:yaml-aliases=, and =:yaml-date= (any of which may be nil).
+Downstream cascades resolve the canonical =:title= and
+=:created-time=; this stage is data-extraction only, not
+decision-making.
 
 =yaml-parse-string= returns nested hash tables by default; we
 ask for alists so plist threading stays simple. Aliases come
@@ -101,8 +137,10 @@ back as a vector — flatten to a list.
 
 #+begin_src emacs-lisp
 (defun sns-roam-import--parse-yaml (input)
-  "Parse YAML in INPUT plist's =:yaml= and add =:title= and =:aliases=.
-Errors loudly if no title is found — every roam node needs one."
+  "Parse YAML in INPUT plist's =:yaml= and add =:yaml-title=,
+=:yaml-aliases=, =:yaml-date=. Any may be nil; never errors on
+missing fields — title and created derivation cascades resolve
+defaults downstream."
   (let* ((yaml-str (plist-get input :yaml))
          (parsed   (if (string-empty-p yaml-str)
                        nil
@@ -110,10 +148,197 @@ Errors loudly if no title is found — every roam node needs one."
                                         :object-type 'alist
                                         :sequence-type 'list)))
          (title    (alist-get 'title parsed))
-         (aliases  (alist-get 'aliases parsed)))
-    (unless title
-      (error "sns-roam-import: no `title:' in %s" (plist-get input :path)))
-    (append (list :title title :aliases aliases) input)))
+         (aliases  (alist-get 'aliases parsed))
+         (date     (alist-get 'date parsed)))
+    (append (list :yaml-title title
+                  :yaml-aliases aliases
+                  :yaml-date date)
+            input)))
+#+end_src
+
+** Derive title (cascade)
+
+Resolve the canonical =:title= via a three-step cascade:
+
+1. =:yaml-title= if present.
+2. First H1 from the body, extracted via pandoc's JSON AST so
+   code-fenced lines, blockquoted hashes, and setext-style H1s
+   (=Title\n=====) are all handled correctly. Inline emphasis,
+   code spans, and links inside the heading text are flattened
+   to plain text by a second pandoc invocation (json → plain).
+3. Filename slug humanised (=what-is-this= → =What Is This=).
+
+The cascade always succeeds — every markdown file can yield a
+title. Records =:title-source= alongside the result
+(=:yaml=, =:h1=, =:filename=) for the message log and for
+downstream curation.
+
+Why pandoc twice rather than a regex on the body or
+=markdown-mode='s primitives: pandoc *is* the markdown parser we
+already trust for body conversion, and asking it to also identify
+the H1 keeps a single source of truth for grammar interpretation.
+Tree-sitter is the principled future replacement (see
+[[file:~/.claude/projects/-Users-stephen-nelsonsmith-Developer-aldi-compass/memory/roam_import_treesitter_future.md][roam-import-treesitter-future]] memory) but isn't ready yet.
+
+#+begin_src emacs-lisp
+(defun sns-roam-import--shell-pandoc-to-json (markdown)
+  "Run pandoc on MARKDOWN, return the JSON AST as a string.
+Errors if pandoc exits non-zero."
+  (with-temp-buffer
+    (let ((exit (let ((coding-system-for-write 'utf-8))
+                  (call-process-region
+                   markdown nil "pandoc" nil t nil
+                   "-f" "markdown+wikilinks_title_after_pipe-auto_identifiers-smart"
+                   "-t" "json"))))
+      (unless (eq exit 0)
+        (error "sns-roam-import: pandoc -t json exited %s\n%s"
+               exit (buffer-string)))
+      (buffer-string))))
+
+(defun sns-roam-import--shell-pandoc-from-json-to-plain (json)
+  "Run pandoc to convert JSON AST string to plain text.
+Used to flatten inline emphasis / code spans / links inside an
+H1 heading to plain text."
+  (with-temp-buffer
+    (let ((exit (let ((coding-system-for-write 'utf-8))
+                  (call-process-region
+                   json nil "pandoc" nil t nil
+                   "-f" "json"
+                   "-t" "plain"
+                   "--wrap=none"))))
+      (unless (eq exit 0)
+        (error "sns-roam-import: pandoc -f json -t plain exited %s\n%s"
+               exit (buffer-string)))
+      (string-trim (buffer-string)))))
+
+(defun sns-roam-import--first-h1-block (blocks)
+  "Walk pandoc AST BLOCKS list for the first level-1 Header.
+Returns the Header alist, or nil. Pure: only inspects structure."
+  (cl-loop for block across blocks
+           when (and (equal (alist-get 't block) "Header")
+                     (let ((c (alist-get 'c block)))
+                       ;; Header c is [level, attrs, inlines]
+                       (and (vectorp c)
+                            (= (length c) 3)
+                            (= (aref c 0) 1))))
+           return block))
+
+(defun sns-roam-import--extract-first-h1 (markdown)
+  "Return the plain-text content of the first H1 in MARKDOWN, or nil.
+Uses pandoc's AST so all markdown grammar quirks (code fences,
+blockquoted hashes, setext H1s) are handled correctly."
+  (let* ((json   (sns-roam-import--shell-pandoc-to-json markdown))
+         (ast    (json-parse-string json :object-type 'alist
+                                    :array-type 'array))
+         (blocks (alist-get 'blocks ast))
+         (h1     (sns-roam-import--first-h1-block blocks)))
+    (when h1
+      ;; Render just this Header back to plain text. Wrap in a
+      ;; minimal Pandoc envelope so pandoc -f json accepts it.
+      (let* ((envelope `((pandoc-api-version . [1 23 1])
+                         (meta . ,(make-hash-table :test 'equal))
+                         (blocks . [,h1])))
+             (envelope-json (json-serialize envelope)))
+        (sns-roam-import--shell-pandoc-from-json-to-plain envelope-json)))))
+
+(defun sns-roam-import--humanise-slug (slug)
+  "Turn a filename slug into a humanised title.
+=what-is-this= → =What Is This=; =atomic-notes= → =Atomic Notes=.
+Splits on hyphens and underscores, title-cases each word."
+  (mapconcat #'capitalize
+             (split-string slug "[-_]+" t)
+             " "))
+
+(defun sns-roam-import--derive-title (input)
+  "Resolve canonical =:title= via cascade; add =:title-source=.
+Cascade: =:yaml-title= → first H1 of body → humanised filename slug.
+Logs the source via =message= so vault hygiene issues are visible."
+  (let* ((yaml-title (plist-get input :yaml-title))
+         (body       (plist-get input :body))
+         (path       (plist-get input :path))
+         (h1         (and (not yaml-title)
+                          (sns-roam-import--extract-first-h1 body)))
+         (slug       (file-name-base path))
+         (title      (or yaml-title
+                         h1
+                         (sns-roam-import--humanise-slug slug)))
+         (source     (cond (yaml-title :yaml)
+                           (h1         :h1)
+                           (t          :filename))))
+    (message "sns-roam-import: title for %s from %s → %S"
+             (file-name-nondirectory path) source title)
+    (append (list :title title :title-source source) input)))
+#+end_src
+
+** Derive created time (cascade)
+
+Resolve the canonical =:created-time= (an emacs internal time
+value) via a three-step cascade:
+
+1. =:yaml-date= if present and parseable as ISO 8601.
+2. Git first-touch — the author date of the first commit that
+   added the file, via =magit-git-string=.
+3. Import-time — =current-time=.
+
+The cascade always succeeds. =current-time= is the honest
+fallback when we have nothing better; we never lie about file
+mtime (which copy operations reset).
+
+Records =:created-source= (=:yaml=, =:git=, =:now=) for the
+message log.
+
+#+begin_src emacs-lisp
+(defun sns-roam-import--parse-yaml-date (date)
+  "Best-effort parse of a yaml DATE field to an emacs time value.
+DATE may be a string (ISO 8601 or simple =YYYY-MM-DD=) or already
+a parsed value from yaml.el. Returns nil on failure rather than
+erroring — the cascade has further fallbacks."
+  (cond
+   ((null date) nil)
+   ((stringp date)
+    (or (ignore-errors (parse-iso8601-time-string date))
+        ;; yaml.el sometimes leaves =YYYY-MM-DD= as a bare string
+        ;; that parse-iso8601-time-string rejects; pad to a full
+        ;; ISO timestamp and retry.
+        (and (string-match-p "\\`[0-9]\\{4\\}-[0-9]\\{2\\}-[0-9]\\{2\\}\\'" date)
+             (ignore-errors
+               (parse-iso8601-time-string (concat date "T00:00:00+00:00"))))))
+   ;; yaml.el may already have decoded a date to a list — we don't
+   ;; rely on that path, so fall through to nil.
+   (t nil)))
+
+(defun sns-roam-import--git-first-touch (path)
+  "Return the time the file at PATH was first added to git, or nil.
+Uses =magit-git-string= so process management and error handling
+go through the canonical magit interface; nil on any failure
+(file not in a repo, file untracked, magit not loaded)."
+  (when (require 'magit nil t)
+    (let* ((default-directory (file-name-directory path))
+           (iso (ignore-errors
+                  (magit-git-string "log" "--diff-filter=A" "--follow"
+                                    "--format=%aI" "-1" "--"
+                                    (file-name-nondirectory path)))))
+      (when (and iso (not (string-empty-p iso)))
+        (ignore-errors (parse-iso8601-time-string iso))))))
+
+(defun sns-roam-import--derive-created (input)
+  "Resolve canonical =:created-time= via cascade; add =:created-source=.
+Cascade: =:yaml-date= → magit first-touch → =current-time=.
+Logs the source via =message=."
+  (let* ((yaml-date  (plist-get input :yaml-date))
+         (path       (plist-get input :path))
+         (yaml-time  (sns-roam-import--parse-yaml-date yaml-date))
+         (git-time   (and (not yaml-time)
+                          (sns-roam-import--git-first-touch path)))
+         (time       (or yaml-time git-time (current-time)))
+         (source     (cond (yaml-time :yaml)
+                           (git-time  :git)
+                           (t         :now))))
+    (message "sns-roam-import: created for %s from %s → %s"
+             (file-name-nondirectory path)
+             source
+             (format-time-string "[%Y-%m-%d %a %H:%M]" time))
+    (append (list :created-time time :created-source source) input)))
 #+end_src
 
 ** Pandoc
@@ -284,21 +509,24 @@ on the AST list under =:elements=."
 (defun sns-roam-import--create-node (input)
   "Create a roam node from INPUT, returning (:id :title :file :aliases).
 Body comes from =:elements= (already AST). KIND is hard-coded
-=permanent= for imports — the corpus we're importing is by
-definition the distilled, atomic kind. If INPUT has a
-pre-assigned =:id=, it's used verbatim; otherwise
-=sns-roam-create-node= generates one. Aliases are passed
-through so the property drawer is written with =:ROAM_ALIASES:=
-included from the start. Threading the pre-assigned ID through
-is what makes the two-pass vault import work (wikilinks resolve
-to the same UUIDs the map promised)."
-  (let* ((aliases (plist-get input :aliases))
+=imported= for every imported note — the importer never trusts
+foreign =kind:= metadata, and =permanent= must be earned
+downstream by curation against the atomic-notes heuristic. If
+INPUT has a pre-assigned =:id=, it's used verbatim; otherwise
+=sns-roam-create-node= generates one. Aliases pass through to the
+property drawer at write time. =:created-time= (resolved by the
+=derive-created= stage) is threaded into =sns-roam-create-node=
+so the file's :CREATED: property and 14-digit prefix both reflect
+the authored date — both formatted from the same internal time
+value."
+  (let* ((aliases (plist-get input :yaml-aliases))
          (created (sns-roam-create-node
                    (plist-get input :title)
-                   "permanent"
+                   "imported"
                    (plist-get input :elements)
                    (plist-get input :id)
-                   aliases)))
+                   aliases
+                   (plist-get input :created-time))))
     (append created (list :aliases aliases))))
 #+end_src
 
@@ -329,6 +557,8 @@ UUID; otherwise a fresh one is generated. Returns the final
 plist (:id :title :file :aliases)."
   (thread-last (sns-roam-import--read-source path)
                (sns-roam-import--parse-yaml)
+               (sns-roam-import--derive-title)
+               (sns-roam-import--derive-created)
                (sns-roam-import--pandoc)
                (sns-roam-import--parse-body-elements)
                (funcall (sns-roam-import--rewrite-wikilinks uuid-map))
@@ -386,14 +616,28 @@ final plists, one per file."
   each file's pre-assigned UUID as an explicit argument all the
   way down to =sns-roam-create-node=. No dynamic state, no
   =cl-letf=, no temporal coupling between caller and callee.
-- *Loud failure on missing title.* Every roam node needs a
-  title; missing means the source YAML is broken.
+- *Title is always derivable.* Three-step cascade
+  (yaml → first H1 → humanised filename slug) guarantees every
+  markdown file produces a valid roam node. The =:title-source=
+  key carries provenance for downstream curation; cascade
+  decisions are logged via =message=.
+- *Created time is always derivable.* Three-step cascade
+  (yaml date → magit first-touch → import-time) gives the most
+  honest authored date we can find. The two timestamp shapes
+  (Org bracket form for =:CREATED:=, 14-digit prefix for the
+  filename) are both formatted from the same internal time
+  value via =format-time-string= — never round-tripped through
+  string parsing.
 - *Soft failure on unresolved wikilinks.* Logged via =warn=,
   link left as-is. Reasonable because we may import in stages
   or against a vault with external references.
-- *KIND hard-coded =permanent=.* The Obsidian observability
-  vault is by construction a set of distilled atomic notes.
-  If a future import has mixed kinds, lift KIND to a parameter.
+- *KIND hard-coded =imported= — never derived from input.* The
+  importer's job is to produce a structurally valid roam node;
+  judging whether a node is =permanent= belongs to curation,
+  performed downstream against the atomic-notes heuristic.
+  Foreign =kind:= metadata in yaml is silently ignored — we
+  never trust strangers' classifications. Two-stage discipline:
+  import liberally, mark conservatively, promote deliberately.
 
 * Footer
 
