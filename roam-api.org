@@ -555,71 +555,188 @@ paragraph edits are a later primitive.
 
 ** Implementation
 
-Strategy: use org-ml to locate the end of the title keyword
-(the last element in the first =section=), then splice the new
-body as raw text after that point. We deliberately do *not*
-rebuild the body through =org-ml-build-*= — that would force
-the caller to pre-parse their content into AST nodes, which is
-overkill for "here's some prose, put it in the file".
+This is the first of the /composed/ write primitives. Rather than
+poke the buffer imperatively, body mutations are expressed as a
+*pure transform* over the note's =section= AST, handed to a single
+shared write boundary. Three layers:
 
-Instead: parse the section, find the position right after
-=#+title:=, erase from that point to =point-max=, insert
-NEW-BODY. The drawer and title remain untouched as bytes.
+1. =sns-roam--map-children= — a pure =(section -> section)= that
+   applies a function to the section's full child list. Operates on
+   the list whole (filter to keep, append to add); never slices
+   parsed nodes into sublists. No I/O.
+2. =sns-roam--update-section= — the *one* effect boundary every body
+   mutation flows through: read → parse → apply a pure section
+   transform → reconcile the buffer via =org-ml-update-this-buffer=
+   (Myers-diff, so overlays/cursor survive) → save.
+3. =sns-roam-set-body= et al. — thin shells: a pure transform
+   composed through the boundary.
+
+=set-body= keeps its string interface (callers pass prose, not AST);
+internally the prose is parsed to body elements and those *replace*
+the existing body. Drawer and =#+title:= are never touched.
 
 #+begin_src emacs-lisp
-(defun sns-roam--title-end-position (section)
-  "Return buffer position immediately after the section's last header element.
-A roam file's first section contains: property-drawer, then
-keywords (#+title:, possibly others). Returns the :end of the
-last keyword child, which is where the body proper begins."
-  (let* ((children (org-ml-get-children section))
-         (header-children
-          (cl-remove-if-not
-           (lambda (c) (or (org-ml-is-type 'property-drawer c)
-                           (org-ml-is-type 'keyword c)))
-           children)))
-    (unless header-children
-      (error "sns-roam: section has no property-drawer or keywords"))
-    (org-ml-get-property :end (car (last header-children)))))
+(defun sns-roam--section-header-p (element)
+  "Non-nil if ELEMENT is roam header furniture (property-drawer or keyword)."
+  (or (org-ml-is-type 'property-drawer element)
+      (org-ml-is-type 'keyword element)))
+
+(defun sns-roam--map-children (fn section)
+  "Return SECTION with FN applied to its full child list.
+FN takes the section's children (header furniture + body) and
+returns a new child list. Pure: returns a new section, mutates
+nothing.
+
+IMPORTANT: operate on the child list as a whole — do NOT slice it
+into header/body sublists and re-`append` them. Parsed nodes carry
+buffer positions and :parent backrefs; reassembling sliced sublists
+of parsed nodes corrupts those, and `org-ml-update-this-buffer`'s
+reconciliation then fails with `number-or-marker-p`. Filtering the
+list in place (e.g. `seq-filter`) is safe; slicing-and-rejoining is
+not.
+
+Body helpers are expressed in terms of this:
+- append: `(append children NEW)` — header stays in front untouched.
+- replace-body: `(append (seq-filter #'sns-roam--section-header-p
+  children) NEW-BODY)` — keep header, drop old body, add new."
+  (org-ml-map-children fn section))
+
+(defun sns-roam--parse-body-elements (string)
+  "Parse STRING of org prose into a list of body elements.
+A bare string parses to a single headline-less section; we return
+that section's children. Empty STRING yields nil."
+  (if (string-empty-p string)
+      nil
+    (let* ((tree    (with-temp-buffer
+                      (insert string)
+                      (org-ml-parse-this-buffer)))
+           (section (car (org-ml-get-children tree))))
+      (if section (org-ml-get-children section) nil))))
+
+(defun sns-roam--update-section (id section-fn)
+  "Apply pure SECTION-FN (section -> section) to node ID and save.
+The single write boundary for body mutations: parse → transform →
+reconcile buffer (`org-ml-update-this-buffer`, minimal-diff) → save.
+Loud failure on unknown ID or malformed file. Returns (:id :file)."
+  (let ((file (sns-roam--node-file-or-error id)))
+    (with-current-buffer (find-file-noselect file)
+      (org-ml-update-this-buffer
+       (lambda (data)
+         (let* ((children (org-ml-get-children data))
+                (section  (car children)))
+           (unless (and section (org-ml-is-type 'section section))
+             (error "sns-roam: %s has no top-level section" file))
+           (org-ml-set-children
+            (cons (funcall section-fn section) (cdr children))
+            data))))
+      (save-buffer)
+      (list :id id :file file))))
 
 (defun sns-roam-set-body (id new-body)
   "Replace the body of roam node ID with NEW-BODY.
 
-The property drawer and =#+title:= keyword are preserved
-verbatim; everything after them is replaced. NEW-BODY is a
-string. Returns t on success.
-
-Errors loudly on unknown ID, missing section, or missing
-header (drawer + keywords)."
-  (let ((file (sns-roam--node-file-or-error id)))
-    (with-current-buffer (find-file-noselect file)
-      (let* ((tree    (org-ml-parse-this-buffer))
-             (section (car (org-ml-get-children tree))))
-        (unless (and section (org-ml-is-type 'section section))
-          (error "sns-roam: %s has no top-level section" file))
-        (let ((body-start (sns-roam--title-end-position section))
-              (normalised (if (or (string-empty-p new-body)
-                                  (string-suffix-p "\n" new-body))
-                              new-body
-                            (concat new-body "\n"))))
-          (delete-region body-start (point-max))
-          (goto-char body-start)
-          (insert normalised)
-          (save-buffer)
-          t)))))
+The property drawer and =#+title:= keyword are preserved verbatim;
+the body (everything after them) is replaced with NEW-BODY parsed
+as org prose. NEW-BODY is a string; empty clears the body.
+Returns (:id :file). Errors loudly on unknown ID or malformed file."
+  (sns-roam--update-section
+   id
+   (lambda (section)
+     (sns-roam--map-children
+      (lambda (children)
+        (append (seq-filter #'sns-roam--section-header-p children)
+                (sns-roam--parse-body-elements new-body)))
+      section))))
 #+end_src
 
 ** Discipline notes
 
-- *Drawer + title preserved by byte-position, not by reconstruction.*
-  We trust org-ml to tell us *where* the header ends; we don't
-  ask it to rebuild the header. Fewer round-trip surprises.
-- *Empty body is valid.* Calling with =""= produces a file with
-  just drawer + title + a trailing newline. Useful for clearing
-  a note before re-populating in stages.
-- *No diff or merge.* Total replace only. If a "smart merge"
-  primitive ever wants to exist, it composes from
-  =sns-roam-get-body= (read) + caller logic + =sns-roam-set-body=.
+- *Pure transform, one effect boundary.* The body operation is a
+  pure =(section -> section)=; the only I/O lives in
+  =sns-roam--update-section=. Every future body primitive (append,
+  promote, merge) composes the same way — the module composes
+  transforms rather than accreting buffer-poking procedures.
+- *Header preserved structurally, not by byte-position.* The
+  transform =seq-filter='s header furniture and re-prepends the new
+  body; no reliance on cursor positions or =delete-region=. It
+  operates on the child list as a whole (never slicing parsed nodes
+  into sublists — see the warning on =sns-roam--map-children=).
+- *Empty body is valid.* =""= parses to nil → an empty body.
+- *Return shape changed* from =t= to =(:id :file)= for provenance
+  parity with the other mutators.
+
+* Mutate: append a relationship link
+
+Append a link from one note to another — the core Zettelkasten act
+of connecting ideas as you spot the connection. The link is added
+as a new body paragraph: a relationship sentence with an inline
+=[[id:...]]= link, so the connection carries its reasoning (per the
+claim-graph design — links are statements, not decoration).
+
+One-directional: org-roam provides backlinks for free, so the
+reverse direction is discoverable without a second physical link.
+
+** Contract
+
+- *Input*:
+  - =FROM-ID= (string) — the note gaining the link. Loud failure if unknown.
+  - =TO-ID= (string) — the link target. Loud failure if unknown.
+  - =LABEL= (string) — the link's display text.
+  - =BEFORE= (string) — prose before the link in the paragraph.
+  - =AFTER= (string) — prose after the link (e.g. =". "=, trailing
+    clause, or full stop). Lets the link sit anywhere in a sentence
+    and keeps punctuation honest, rather than forcing the link to the
+    end. Pass =""= for nothing after.
+- *Output*: =(:from :to :file)=.
+- *Side effect*: appends one paragraph to FROM-ID's body.
+- *Discipline*: existing content is untouched (additive only). Both
+  endpoints validated before any mutation. The primitive is *dumb* —
+  it does not check whether the link already exists; that policy
+  belongs to the orchestrating skill (=roam-distill=), keeping the
+  primitive a single honest mutation.
+
+** Implementation
+
+A pure body transform (append one paragraph) composed through
+=sns-roam--update-section=. No buffer-poking; the paragraph is built
+as an AST node and appended to the body element list. =BEFORE= and
+=AFTER= bracket the link so the caller controls phrasing and
+punctuation; empty strings are dropped so no stray empty text nodes
+appear.
+
+#+begin_src emacs-lisp
+(defun sns-roam-append-link (from-id to-id label before after)
+  "Append a relationship paragraph to FROM-ID linking to TO-ID.
+The paragraph reads BEFORE then an inline [[id:TO-ID][LABEL]] link
+then AFTER, and becomes the last body element. Existing content is
+untouched. One-directional; org-roam backlinks give the reverse.
+The primitive does NOT dedupe — call it once per intended link.
+Loud failure if FROM-ID or TO-ID is unknown. Returns (:from :to :file)."
+  (sns-roam--node-file-or-error to-id)  ; validate target exists, loud
+  (let* ((link  (org-ml-build-link (concat "id:" to-id) label))
+         ;; Drop empty BEFORE/AFTER so no empty secondary-strings sneak in.
+         (parts (seq-remove (lambda (x) (and (stringp x) (string-empty-p x)))
+                            (list before link after)))
+         (res (sns-roam--update-section
+              from-id
+              (lambda (section)
+                (sns-roam--map-children
+                 (lambda (children)
+                   (append children
+                           (list (apply #'org-ml-build-paragraph parts))))
+                 section)))))
+    (list :from from-id :to to-id :file (plist-get res :file))))
+#+end_src
+
+** Discipline notes
+
+- *Additive, not surgical.* This appends; it never rewrites existing
+  elements. Inline link-into-an-existing-paragraph is the future
+  /transform/ primitive, which also composes through
+  =sns-roam--update-section=.
+- *One-directional by design.* Backlinks cover the reverse. A
+  bidirectional variant (for symmetric relations like "contradicts")
+  would be a separate, explicit primitive.
 
 * Mutate: set a section-level keyword
 
