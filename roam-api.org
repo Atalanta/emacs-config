@@ -731,12 +731,69 @@ Loud failure if FROM-ID or TO-ID is unknown. Returns (:from :to :file)."
 ** Discipline notes
 
 - *Additive, not surgical.* This appends; it never rewrites existing
-  elements. Inline link-into-an-existing-paragraph is the future
-  /transform/ primitive, which also composes through
-  =sns-roam--update-section=.
+  elements. Whole-element replacement is =sns-roam-replace-element=
+  below; both compose through =sns-roam--update-section=.
 - *One-directional by design.* Backlinks cover the reverse. A
   bidirectional variant (for symmetric relations like "contradicts")
   would be a separate, explicit primitive.
+
+* Mutate: replace a body element
+
+Surgically replace one body element — rewrite a claim's paragraph,
+swap a stale sentence — without reproducing the rest of the body
+(which whole-body =set-body= would force). The element to change is
+identified by a predicate; exactly one must match, so an ambiguous
+edit never silently hits the wrong place.
+
+** Contract
+
+- *Input*:
+  - =ID= (string) — the roam node UUID. Loud failure if unknown.
+  - =PRED= (function) — a unary predicate on an org-ml node. Must
+    match *exactly one* body element; zero or many is a loud error.
+  - =NEW-ELEMENT= (org-ml node) — the replacement, built via
+    =org-ml-build-*=.
+- *Output*: =(:id :file)=.
+- *Side effect*: replaces the matched element in FROM's body.
+- *Discipline*: unique-handle — never guesses among multiple matches.
+  AST in, AST out; no string-munging. Replaces an element *whole*; it
+  does not edit *within* an element (that is a deeper, separate need).
+
+** Implementation
+
+A pure transform — match by predicate, assert uniqueness, map the
+match to NEW-ELEMENT — composed through =sns-roam--update-section=.
+The predicate runs over the whole section but naturally targets body
+elements (header furniture rarely matches a content predicate).
+
+#+begin_src emacs-lisp
+(defun sns-roam-replace-element (id pred new-element)
+  "Replace the unique body element of node ID matching PRED with NEW-ELEMENT.
+PRED is a unary predicate on an org-ml node; NEW-ELEMENT is a built
+org-ml node. Asserts exactly one match — loud error on zero or many,
+so an ambiguous edit never silently hits the wrong element. Composes
+through `sns-roam--update-section'. Returns (:id :file)."
+  (sns-roam--update-section
+   id
+   (lambda (section)
+     (let ((matches (org-ml-match `((:pred ,pred)) section)))
+       (unless (= 1 (length matches))
+         (error "sns-roam: replace-element matched %d elements, need exactly 1"
+                (length matches)))
+       (org-ml-match-map `((:pred ,pred))
+                         (lambda (_old) new-element)
+                         section)))))
+#+end_src
+
+** Discipline notes
+
+- *Unique-handle, loud failure.* Zero or many matches errors rather
+  than guessing — the wrong-element edit does not exist as an outcome.
+- *Whole-element only.* Replaces a matched element entirely. Editing
+  inside an element (fix one word in a paragraph) is a deeper need not
+  served here; build the new element and replace.
+- *Composes upward.* Merge/split flows are =replace-element= +
+  =append-link= + =create-node=, orchestrated by the skill.
 
 * Mutate: set a section-level keyword
 
