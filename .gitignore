@@ -20,6 +20,8 @@ projects
 tramp
 network-security.data
 org-roam.db
+.org-id-locations
+elfeed/
 
 # Cache directories
 eln-cache/

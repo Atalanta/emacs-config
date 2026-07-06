@@ -174,6 +174,7 @@ Each module installs and configures a related group of packages.
   (require 'sns-knowledge-base)
   (require 'sns-development-environment)
   (require 'sns-technical-writing)
+  (require 'sns-feeds)
   (require 'sns-emacs-api)
 #+end_src
 
@@ -181,22 +182,26 @@ Each module installs and configures a related group of packages.
 
 *** Theme
 
-=ef-themes= are modern and readable. =ef-cherie= is the default.
+=ef-themes= are modern and readable. =ef-cherie= is the default. Load the
+theme only in a graphical frame — under =emacs -nw= (e.g. in tmux over
+Ghostty) leave the faces unset so the terminal's own colours show through.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el" :mkdirp yes
 (use-package ef-themes
   :ensure t
   :config
-  (load-theme 'ef-cherie t))
+  (when (display-graphic-p)
+    (load-theme 'ef-cherie t)))
 #+end_src
 
 *** Fonts and font resizing
-Use Maple Mono NF at 15pt if installed; otherwise fall back to the system monospace font. Matches the font configured in Ghostty so the look stays consistent across editor and terminal.
+Use Maple Mono NF at 15pt if installed; otherwise fall back to the system monospace font. Matches the font configured in Ghostty so the look stays consistent across editor and terminal. Only meaningful in a graphical frame — in a terminal the font is Ghostty's, so skip it under =emacs -nw=.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el" :mkdirp yes
-(if (member "Maple Mono NF" (font-family-list))
-    (set-face-attribute 'default nil :font "Maple Mono NF-15")
-  (set-face-attribute 'default nil :family "monospace" :height 150))
+(when (display-graphic-p)
+  (if (member "Maple Mono NF" (font-family-list))
+      (set-face-attribute 'default nil :font "Maple Mono NF-15")
+    (set-face-attribute 'default nil :family "monospace" :height 150)))
 #+end_src
 Bind =Cmd-=/-/0= to increase, decrease, and reset font size.
 
@@ -569,6 +574,33 @@ A minor mode that highlights double spaces, to help me break the habit of insert
 *** Make available
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-technical-writing.el"
 (provide 'sns-technical-writing)
+#+end_src
+** Feeds
+
+[[https://github.com/skeeto/elfeed][Elfeed]] is a web feed (RSS/Atom) reader that lives inside Emacs. Open
+it with =C-x w=. Render entries as prose — wrapped at 80 columns, in a
+variable-pitch face — for comfortable reading.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-feeds.el" :mkdirp yes
+  (use-package elfeed
+    :ensure t
+    :bind ("C-x w" . elfeed)
+    :config
+    (setq elfeed-feeds
+          '(("file:///Users/stephen.nelsonsmith/Developer/linked-in-miner/feed/linkedin.atom" linkedin)))
+    (add-hook 'elfeed-show-mode-hook
+              (lambda ()
+                (setq-local shr-width 80)              ; wrap for readability
+                (setq-local shr-use-fonts t)           ; proportional fonts
+                (variable-pitch-mode 1)))              ; prose in a variable-pitch face
+    ;; optional: nicer margins
+    ;; (add-hook 'elfeed-show-mode-hook #'olivetti-mode)
+    )
+#+end_src
+
+*** Make available
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-feeds.el"
+(provide 'sns-feeds)
 #+end_src
 ** Emacs Lisp Functions
 Utility functions I've written or collected.
