@@ -631,25 +631,41 @@ etc. in its header.
 #+end_src
 ** Feeds
 
-[[https://github.com/skeeto/elfeed][Elfeed]] is a web feed (RSS/Atom) reader that lives inside Emacs. Open
-it with =C-x w=. Render entries as prose — wrapped at 80 columns, in a
-variable-pitch face — for comfortable reading.
+Feeds arrive as local news via Gnus. The =linkedin-miner= project scrapes
+tracked authors' posts (plus the readable text of any article they link
+to) and writes each as an RFC 5536 article into an =nnml= tree under
+=~/Mail/linkedin/<author>/=, one newsgroup per author. Gnus reads that tree
+directly — no NNTP server, no browser, no LinkedIn. Threading, scoring, and
+killfiles come for free.
+
+Open Gnus with =M-x gnus=. If the =linkedin.*= groups don't appear, press
+=g= to rescan; new groups may need =A A= (list all) then subscribe, or the
+group topic to be shown with =L=.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-feeds.el" :mkdirp yes
-  (use-package elfeed
-    :ensure t
-    :bind ("C-x w" . elfeed)
+  ;; Gnus reads the linkedin-miner nnml tree as local news.
+  (use-package gnus
+    :ensure nil                      ; built in
+    :bind ("C-x w" . gnus)
     :config
-    (setq elfeed-feeds
-          '(("file:///Users/stephen.nelsonsmith/Developer/linked-in-miner/feed/linkedin.atom" linkedin)))
-    (add-hook 'elfeed-show-mode-hook
+    ;; Primary select method: local nnml mail spool at ~/Mail.
+    (setq gnus-select-method '(nnml "")
+          nnml-directory "~/Mail"
+          gnus-secondary-select-methods nil)
+    ;; Show groups even with zero unread, and surface newly-created groups
+    ;; without ceremony (the scraper adds a group per new author).
+    (setq gnus-permanently-visible-groups "linkedin\\."
+          gnus-save-killed-list nil
+          gnus-check-new-newsgroups 'ask-server)
+    ;; Read the plain-text article bodies comfortably: wrap and fill for prose.
+    (add-hook 'gnus-article-mode-hook
               (lambda ()
-                (setq-local shr-width 80)              ; wrap for readability
-                (setq-local shr-use-fonts t)           ; proportional fonts
-                (variable-pitch-mode 1)))              ; prose in a variable-pitch face
-    ;; optional: nicer margins
-    ;; (add-hook 'elfeed-show-mode-hook #'olivetti-mode)
-    )
+                (setq-local fill-column 80)
+                (visual-line-mode 1)))
+    ;; Thread by references (matters once comment trees are ingested), newest
+    ;; activity first at the group level.
+    (setq gnus-thread-sort-functions '(gnus-thread-sort-by-date)
+          gnus-article-sort-functions '(gnus-article-sort-by-date)))
 #+end_src
 
 *** Make available
