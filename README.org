@@ -369,8 +369,12 @@ restated), =fleeting= (rough capture for later distillation).
                     "%<%Y%m%d%H%M%S>-${slug}.org"
                     ":PROPERTIES:\n:ID:       ${id}\n:CREATED:  %U\n:KIND:     fleeting\n:END:\n#+title: ${title}\n\n")
            :unnarrowed t)))
+#+end_src
 
-  (provide 'sns-knowledge-base)
+*** Make available
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-knowledge-base.el"
+(provide 'sns-knowledge-base)
 #+end_src
 
 ** Development Environment
