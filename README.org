@@ -371,6 +371,33 @@ restated), =fleeting= (rough capture for later distillation).
            :unnarrowed t)))
 #+end_src
 
+*** Daily journal
+
+One file per day in =~/roam/journal/=, titled with the full date.
+=C-c r j= opens today's entry, creating it if needed.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-knowledge-base.el"
+  (use-package org-roam-dailies
+    :ensure nil                      ; ships with org-roam
+    :after org-roam
+    :custom
+    (org-roam-dailies-directory "journal/")
+    :bind ("C-c r j" . org-roam-dailies-goto-today))
+#+end_src
+
+**** Capture template
+
+Each capture appends a heading to the day's file.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-knowledge-base.el"
+  (setq org-roam-dailies-capture-templates
+        '(("d" "daily" entry
+           "* %?"
+           :target (file+head
+                    "%<%Y-%m-%d>.org"
+                    "#+title: %<%A %d %B %Y>\n"))))
+#+end_src
+
 *** Make available
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-knowledge-base.el"
