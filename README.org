@@ -593,9 +593,32 @@ A minor mode that highlights double spaces, to help me break the habit of insert
       (font-lock-ensure))))
 #+end_src
 
+*** Presentations with reveal.js
+
+=org-re-reveal= exports an org file to a [[https://revealjs.com/][reveal.js]] HTML slide deck
+(dispatch with =C-c C-e v v=, or =C-c C-e v b= to open in the browser).
+Each top-level heading becomes a slide; sub-headings nest as vertical slides.
+=htmlize= gives syntax-highlighted code blocks in the exported HTML.
+
+We use =org-re-reveal= rather than the older =ox-reveal=: ox-reveal has been
+unmaintained since 2022 and its headline transcoder silently returns nil under
+Org 9.8, so exports collapse to just the title slide. org-re-reveal is the
+maintained fork and works with current Org.
+
+The reveal.js library is pulled from a CDN so decks work anywhere without a
+local install. Any deck can override these with =#+REVEAL_ROOT=, =#+REVEAL_THEME=,
+etc. in its header.
+
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-technical-writing.el"
-  (use-package ox-reveal
-    :ensure t)
+  (use-package org-re-reveal
+    :ensure t
+    :after org
+    :config
+    (setq org-re-reveal-root "https://cdn.jsdelivr.net/npm/reveal.js@4"
+          org-re-reveal-revealjs-version "4"
+          org-re-reveal-theme "moon"
+          org-re-reveal-transition "slide"
+          org-re-reveal-mathjax t))
   (use-package htmlize
     :ensure t)
 #+end_src
