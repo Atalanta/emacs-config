@@ -478,11 +478,13 @@ Cider provides the Clojure REPL.
   :hook (clojure-mode . cider-mode))
 #+end_src
 
-LSP gives IDE features: refactoring, inline documentation, error checking.
+LSP gives IDE features: refactoring, inline documentation, error checking. home-manager installs =clojure-lsp=, so lsp-mode must never offer to download a server. It downloads in a Lisp thread, and a prompt from that thread deadlocks Emacs on macOS.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
   (use-package lsp-mode
     :ensure t
+    :custom
+    (lsp-enable-suggest-server-download nil)
     :hook ((clojure-mode . lsp)
 	   (clojurescript-mode . lsp))
     :commands lsp)
