@@ -48,6 +48,12 @@ Emacs reads this file first. It runs before any packages load and sets a few UI 
   (setq frame-inhibit-implied-resize t)
 #+end_src
 
+Emacs native-compiles each installed package in the background, and by default pops up =*Warnings*= for any compiler warning. Those warnings are about third-party package code and recur whenever a package updates. Log them to =*Async-native-compile-log*= instead, without the popup. Warnings about this config, such as a missing =lexical-binding= cookie, still appear.
+
+#+begin_src emacs-lisp :tangle "early-init.el"
+  (setq native-comp-async-report-warnings-errors 'silent)
+#+end_src
+
 * The ~init.el~ file
 
 Global settings and module imports.
