@@ -493,6 +493,23 @@ LSP gives IDE features: refactoring, inline documentation, error checking. home-
   :ensure t)
 #+end_src
 
+Company shows completions in a popup as you type. lsp-mode turns it on in every LSP buffer. The lsp-mode Clojure guide, "Configuring Emacs as a Clojure IDE", sets the prefix length to 1, so the popup appears after one character.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
+  (use-package company
+    :ensure t
+    :custom
+    (company-minimum-prefix-length 1))
+#+end_src
+
+clojure-lsp offers snippets such as =defn=, =deftest= and =comment= as completions. Each has tabstops for the parts to fill in. lsp-mode expands them with yasnippet, and with =yas-minor-mode= on, =TAB= jumps to the next tabstop.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
+  (use-package yasnippet
+    :ensure t
+    :hook (lsp-mode . yas-minor-mode))
+#+end_src
+
 *** Magit
 
 Magit is an interface for Git.
