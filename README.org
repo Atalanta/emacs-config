@@ -478,6 +478,13 @@ Cider provides the Clojure REPL.
   :hook (clojure-mode . cider-mode))
 #+end_src
 
+lsp-mode's performance guide finds the Emacs defaults too low for a language server. The client and server exchange JSON constantly, which makes a lot of garbage, so collect it less often. Some server responses run from 800 KB to 3 MB, so read up to 1 MB of process output at a time instead of 64 KB.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
+  (setq gc-cons-threshold (* 100 1024 1024)
+        read-process-output-max (* 1024 1024))
+#+end_src
+
 LSP gives IDE features: refactoring, inline documentation, error checking. home-manager installs =clojure-lsp=, so lsp-mode must never offer to download a server. It downloads in a Lisp thread, and a prompt from that thread deadlocks Emacs on macOS.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
