@@ -155,10 +155,10 @@ Modules live in =sns-emacs-modules/=. Add it to the load path.
 
 ** Run as a server
 
-Run an Emacs server so external tools — =emacsclient=, scripts, AI agents
-— can evaluate elisp in this Emacs. Pin the socket to =~/.emacs.d/server/=
+Run an Emacs server so external tools (=emacsclient=, scripts, AI agents)
+can evaluate elisp in this Emacs. Pin the socket to =~/.emacs.d/server/=
 so its path doesn't depend on =$TMPDIR= and is reachable from any shell.
-Create the directory with mode =700= — =server.el= refuses to run if it's
+Create the directory with mode =700=, because =server.el= refuses to run if it's
 group- or world-accessible, since a writable socket directory would let
 other users spoof the server. Start the server only if one isn't already
 running.
@@ -191,7 +191,7 @@ Each module installs and configures a related group of packages.
 *** Theme
 
 =ef-themes= are modern and readable. =ef-cherie= is the default. Load the
-theme only in a graphical frame — under =emacs -nw= (e.g. in tmux over
+theme only in a graphical frame. Under =emacs -nw= (e.g. in tmux over
 Ghostty) leave the faces unset so the terminal's own colours show through.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el" :mkdirp yes
@@ -203,7 +203,7 @@ Ghostty) leave the faces unset so the terminal's own colours show through.
 #+end_src
 
 *** Fonts and font resizing
-Use Maple Mono NF at 15pt if installed; otherwise fall back to the system monospace font. Matches the font configured in Ghostty so the look stays consistent across editor and terminal. Only meaningful in a graphical frame — in a terminal the font is Ghostty's, so skip it under =emacs -nw=.
+Use Maple Mono NF at 15pt if installed; otherwise fall back to the system monospace font. Matches the font configured in Ghostty so the look stays consistent across editor and terminal. Only meaningful in a graphical frame: in a terminal the font is Ghostty's, so skip it under =emacs -nw=.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el" :mkdirp yes
 (when (display-graphic-p)
@@ -643,7 +643,7 @@ Feeds arrive as local news via Gnus. The =linkedin-miner= project scrapes
 tracked authors' posts (plus the readable text of any article they link
 to) and writes each as an RFC 5536 article into an =nnml= tree under
 =~/Mail/linkedin/<author>/=, one newsgroup per author. Gnus reads that tree
-directly — no NNTP server, no browser, no LinkedIn. Threading, scoring, and
+directly: no NNTP server, no browser, no LinkedIn. Threading, scoring, and
 killfiles come for free.
 
 Open Gnus with =M-x gnus=. If the =linkedin.*= groups don't appear, press
