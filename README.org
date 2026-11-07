@@ -524,6 +524,15 @@ Flycheck shows clojure-lsp's diagnostics, which come from clj-kondo, as underlin
     :ensure t)
 #+end_src
 
+lsp-treemacs shows the language server's view of the code as trees in a side window. lsp-mode binds it under its prefix: =s-l g e= lists the project's errors and =s-l g h= shows a function's callers. =M-x lsp-treemacs-symbols= outlines the current file. The guide's one treemacs setting drops the blank line between root entries.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
+  (use-package lsp-treemacs
+    :ensure t
+    :custom
+    (treemacs-space-between-root-nodes nil))
+#+end_src
+
 *** Magit
 
 Magit is an interface for Git.
