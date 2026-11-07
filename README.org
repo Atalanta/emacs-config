@@ -24,6 +24,8 @@ First launch downloads and compiles packages, which takes a few minutes.
 
 To change the config: edit this file, then run =org-babel-tangle= (=C-c C-v t=). Only blocks with a =:tangle= header are written out.
 
+The first block written to each file starts with a =lexical-binding= cookie. Emacs reads the cookie only from a file's first line, and without it the file uses the older dynamic binding, which Emacs 31 warns about.
+
 * Overview
 
 Tangling =README.org= produces:
@@ -38,6 +40,7 @@ Tangling =README.org= produces:
 Emacs reads this file first. It runs before any packages load and sets a few UI defaults.
 
 #+begin_src emacs-lisp :tangle "early-init.el"
+;;; -*- lexical-binding: t -*-
   (setq inhibit-startup-message t)
   (tool-bar-mode -1)
   (scroll-bar-mode -1)
@@ -53,6 +56,7 @@ Global settings and module imports.
 On machines where I use Nix, add the Nix profile to Emacs's =PATH=:
 
 #+begin_src emacs-lisp :tangle "init.el"
+;;; -*- lexical-binding: t -*-
 (defun setup-nix-path ()
   "Add Nix profile to Emacs environment."
   (let ((nix-bin (expand-file-name ".nix-profile/bin" (getenv "HOME"))))
@@ -195,6 +199,7 @@ theme only in a graphical frame. Under =emacs -nw= (e.g. in tmux over
 Ghostty) leave the faces unset so the terminal's own colours show through.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-look-and-feel.el" :mkdirp yes
+;;; -*- lexical-binding: t -*-
 (use-package ef-themes
   :ensure t
   :config
@@ -294,6 +299,7 @@ Org Mode for journalling, writing projects, and this literate config.
 Wrap long lines at word boundaries with =visual-line-mode=. Add an =org-tempo= shortcut so =<el= expands to an Emacs Lisp source block.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-org-mode.el"
+;;; -*- lexical-binding: t -*-
   (defun setup-structure-templates ()
     (require 'org-tempo)
     (add-to-list 'org-structure-template-alist '("el" . "src emacs-lisp")))
@@ -316,6 +322,7 @@ I use [[https://www.orgroam.com/][Org Roam]] for atomic, linked notes, in the Ze
 Notes live in =~/roam/=, in their own Git repo.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-knowledge-base.el" :mkdirp yes
+;;; -*- lexical-binding: t -*-
   (defvar sns-roam-directory
     (expand-file-name "~/roam/")
     "Directory containing org-roam notes.")
@@ -421,6 +428,7 @@ Language support and tooling for the languages I use.
 Emacs Lisp and Clojure are my main Lisps. Both need paren-aware editing.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
+;;; -*- lexical-binding: t -*-
   (show-paren-mode t)
 
   (use-package paredit
@@ -575,6 +583,7 @@ ESS (Emacs Speaks Statistics) supports R: REPL, code evaluation, and documentati
 ** Technical Writing
 *** Markdown
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-technical-writing.el"
+;;; -*- lexical-binding: t -*-
   (use-package markdown-mode
     :ensure t
     :hook (markdown-mode . visual-line-mode))
@@ -651,6 +660,7 @@ Open Gnus with =M-x gnus=. If the =linkedin.*= groups don't appear, press
 group topic to be shown with =L=.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-feeds.el" :mkdirp yes
+;;; -*- lexical-binding: t -*-
   ;; Gnus reads the linkedin-miner nnml tree as local news.
   (use-package gnus
     :ensure nil                      ; built in
@@ -689,6 +699,7 @@ Utility functions I've written or collected.
 
 *** Change themes cleanly
 #+begin_src emacs-lisp :tangle "sns-lisp/sns-functions.el" :mkdirp yes
+;;; -*- lexical-binding: t -*-
   (defun reset-themes-and-load (theme)
     "Disable all themes and load THEME without altering custom faces."
     (interactive
@@ -788,6 +799,7 @@ preserves more of the original buffer than
 Provisioned for future use when the agent-roam interface lands.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-emacs-api.el" :mkdirp yes
+;;; -*- lexical-binding: t -*-
   (use-package org-ml
     :ensure t
     :after org)
