@@ -125,6 +125,14 @@ Re-enable =upcase-region= and =downcase-region=, which Emacs disables by default
 (put 'downcase-region 'disabled nil)
 #+end_src
 
+** Trust the Zscaler proxy
+On the work Mac, Zscaler re-signs HTTPS connections with its own root. Emacs checks certificates with GnuTLS against =gnutls-trustfiles=, and the only default file on macOS, =/etc/ssl/cert.pem=, lacks that root. Every HTTPS connection then raises a Network Security Manager prompt. A prompt from a Lisp thread deadlocks Emacs. home-manager builds =~/.pki/zscaler/ca-bundle.pem= from the public CAs, minus the compromised eMudhra roots, plus the Zscaler root. Use it when it exists, so the personal machine keeps the defaults.
+
+#+begin_src emacs-lisp :tangle "init.el"
+(let ((work-ca-bundle (expand-file-name "~/.pki/zscaler/ca-bundle.pem")))
+  (when (file-readable-p work-ca-bundle)
+    (setq gnutls-trustfiles (list work-ca-bundle))))
+#+end_src
 
 ** Set up package archives
 GNU ELPA holds GPL-licensed packages. MELPA holds the rest, including Org Roam and Magit.
