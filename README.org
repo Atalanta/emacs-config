@@ -517,6 +517,13 @@ clojure-lsp offers snippets such as =defn=, =deftest= and =comment= as completio
     :hook (lsp-mode . yas-minor-mode))
 #+end_src
 
+Flycheck shows clojure-lsp's diagnostics, which come from clj-kondo, as underlines in the buffer as you type. lsp-mode prefers flycheck to the built-in flymake whenever it is installed, and turns it on in every LSP buffer.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
+  (use-package flycheck
+    :ensure t)
+#+end_src
+
 *** Magit
 
 Magit is an interface for Git.
