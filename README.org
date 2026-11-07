@@ -452,15 +452,12 @@ Emacs Lisp and Clojure are my main Lisps. Both need paren-aware editing.
 
 **** Clojure
 
-=clojure-mode= for =.clj=, =.cljs=, and =.edn= files. The =put= calls teach the indenter to treat Speclj's =describe=, =context=, and =it= as definition forms.
-
+=clojure-mode= picks the mode for each Clojure file itself: =clojure-mode= for =.clj=, =clojurescript-mode= for =.cljs=, =clojurec-mode= for =.cljc= and =edn-mode= for =.edn=. Each of those derives from =clojure-mode=, so every hook on =clojure-mode= below runs in all of them. =:defer t= keeps the package from loading until the first Clojure file opens. The =put= calls teach the indenter to treat Speclj's =describe=, =context=, and =it= as definition forms.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
   (use-package clojure-mode
     :ensure t
-    :mode (("\\.clj\\'" . clojure-mode)
-	   ("\\.cljs\\'" . clojure-mode)
-	   ("\\.edn\\'" . clojure-mode))
+    :defer t
     :config
   (setq clojure-indent-style 'always-align
         clojure-align-forms-automatically t
@@ -492,8 +489,7 @@ LSP gives IDE features: refactoring, inline documentation, error checking. home-
     :ensure t
     :custom
     (lsp-enable-suggest-server-download nil)
-    :hook ((clojure-mode . lsp)
-	   (clojurescript-mode . lsp))
+    :hook (clojure-mode . lsp)
     :commands lsp)
 
   (use-package lsp-ui
