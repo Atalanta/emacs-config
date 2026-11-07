@@ -491,17 +491,6 @@ LSP gives IDE features: refactoring, inline documentation, error checking.
   :ensure t)
 #+end_src
 
-Tree-sitter provides accurate syntax parsing for highlighting and structural navigation.
-
-#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-development-environment.el" :mkdirp yes
-(use-package tree-sitter
-  :ensure t
-  :hook (clojure-mode . tree-sitter-mode))
-
-(use-package tree-sitter-langs
-  :ensure t)
-#+end_src
-
 *** Magit
 
 Magit is an interface for Git.
