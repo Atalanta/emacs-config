@@ -62,6 +62,24 @@ On machines where I use Nix, add the Nix profile to Emacs's =PATH=:
 (setup-nix-path)
 #+end_src
 
+** Trust the Zscaler proxy
+On the work Mac, Zscaler re-signs HTTPS connections with its own root. Emacs checks certificates with GnuTLS against =gnutls-trustfiles=, and the only default file on macOS, =/etc/ssl/cert.pem=, lacks that root. Every HTTPS connection then raises a Network Security Manager prompt. A prompt from a Lisp thread deadlocks Emacs. home-manager builds =~/.pki/zscaler/ca-bundle.pem= from the public CAs, minus the compromised eMudhra roots, plus the Zscaler root. Use it when it exists, so the personal machine keeps the defaults.
+
+#+begin_src emacs-lisp :tangle "init.el"
+(let ((work-ca-bundle (expand-file-name "~/.pki/zscaler/ca-bundle.pem")))
+  (when (file-readable-p work-ca-bundle)
+    (setq gnutls-trustfiles (list work-ca-bundle))))
+#+end_src
+
+** Set up package archives
+GNU ELPA holds GPL-licensed packages. MELPA holds the rest, including Org Roam and Magit.
+
+#+begin_src emacs-lisp :tangle "init.el"
+(setq package-archives
+      '(("gnu-elpa" . "https://elpa.gnu.org/packages/")
+        ("melpa" . "https://melpa.org/packages/")))
+#+end_src
+
 ** Ensure shell environment variables are available
 
 GUI Emacs on macOS doesn't inherit shell environment variables. =exec-path-from-shell= imports them so Emacs can find tools like Git. Only run it under a window system; on a Linux terminal Emacs the environment is already correct.
@@ -123,24 +141,6 @@ Re-enable =upcase-region= and =downcase-region=, which Emacs disables by default
 #+begin_src emacs-lisp :tangle "init.el"
 (put 'upcase-region 'disabled nil)
 (put 'downcase-region 'disabled nil)
-#+end_src
-
-** Trust the Zscaler proxy
-On the work Mac, Zscaler re-signs HTTPS connections with its own root. Emacs checks certificates with GnuTLS against =gnutls-trustfiles=, and the only default file on macOS, =/etc/ssl/cert.pem=, lacks that root. Every HTTPS connection then raises a Network Security Manager prompt. A prompt from a Lisp thread deadlocks Emacs. home-manager builds =~/.pki/zscaler/ca-bundle.pem= from the public CAs, minus the compromised eMudhra roots, plus the Zscaler root. Use it when it exists, so the personal machine keeps the defaults.
-
-#+begin_src emacs-lisp :tangle "init.el"
-(let ((work-ca-bundle (expand-file-name "~/.pki/zscaler/ca-bundle.pem")))
-  (when (file-readable-p work-ca-bundle)
-    (setq gnutls-trustfiles (list work-ca-bundle))))
-#+end_src
-
-** Set up package archives
-GNU ELPA holds GPL-licensed packages. MELPA holds the rest, including Org Roam and Magit.
-
-#+begin_src emacs-lisp :tangle "init.el"
-(setq package-archives
-      '(("gnu-elpa" . "https://elpa.gnu.org/packages/")
-        ("melpa" . "https://melpa.org/packages/")))
 #+end_src
 
 ** Import modules
