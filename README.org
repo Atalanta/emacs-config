@@ -420,6 +420,19 @@ Each capture appends a heading to the day's file.
 #+end_src
 
 *** Make available
+*** The sns-roam bridge
+
+Claude reads and edits the slipbox through =sns-roam=, whose code is in
+=~/Developer/sns-roam=. Emacs loads it on first use, so
+=M-x sns-roam-meeting-note= works straight after a restart.
+
+#+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-knowledge-base.el"
+  (use-package sns-roam-api
+    :ensure nil
+    :load-path "~/Developer/sns-roam/lisp"
+    :commands (sns-roam-meeting-note))
+#+end_src
+
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-knowledge-base.el"
 (provide 'sns-knowledge-base)
