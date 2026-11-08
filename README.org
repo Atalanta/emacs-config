@@ -437,7 +437,21 @@ straight after a restart.
 
   (let ((checkout-lisp (expand-file-name "lisp" sns-roam-checkout-directory)))
     (if (file-directory-p checkout-lisp)
-        (add-to-list 'load-path checkout-lisp)
+        (progn
+          (add-to-list 'load-path checkout-lisp)
+          ;; The checkout is not installed as a package, so install what its
+          ;; Package-Requires header lists and Emacs does not have yet.
+          (dolist (requirement
+                   (package-desc-reqs
+                    (with-temp-buffer
+                      (insert-file-contents
+                       (expand-file-name "sns-roam-api.el" checkout-lisp))
+                      (package-buffer-info))))
+            (unless (or (eq (car requirement) 'emacs)
+                        (package-installed-p (car requirement)))
+              (unless package-archive-contents
+                (package-refresh-contents))
+              (package-install (car requirement)))))
       (unless (package-installed-p 'sns-roam-api)
         (package-vc-install `(sns-roam-api :url ,sns-roam-vc-url :lisp-dir "lisp"))))
     (autoload 'sns-roam-meeting-note "sns-roam-api" nil t))
