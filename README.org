@@ -422,15 +422,25 @@ Each capture appends a heading to the day's file.
 *** Make available
 *** The sns-roam bridge
 
-Claude reads and edits the slipbox through =sns-roam=, whose code is in
-=~/Developer/sns-roam=. Emacs loads it on first use, so
-=M-x sns-roam-meeting-note= works straight after a restart.
+Claude reads and edits the slipbox through =sns-roam=. When
+=~/Developer/sns-roam= exists, Emacs loads the library from it. On a
+machine without that checkout, Emacs installs the library from GitHub
+the first time it starts. Either way =M-x sns-roam-meeting-note= works
+straight after a restart.
 
 #+begin_src emacs-lisp :tangle "sns-emacs-modules/sns-knowledge-base.el"
-  (use-package sns-roam-api
-    :ensure nil
-    :load-path "~/Developer/sns-roam/lisp"
-    :commands (sns-roam-meeting-note))
+  (defvar sns-roam-checkout-directory "~/Developer/sns-roam"
+    "Local checkout of sns-roam.  When it exists, Emacs loads the library from it.")
+
+  (defvar sns-roam-vc-url "https://github.com/Atalanta/sns-roam"
+    "Repository that Emacs installs sns-roam from when there is no local checkout.")
+
+  (let ((checkout-lisp (expand-file-name "lisp" sns-roam-checkout-directory)))
+    (if (file-directory-p checkout-lisp)
+        (add-to-list 'load-path checkout-lisp)
+      (unless (package-installed-p 'sns-roam-api)
+        (package-vc-install `(sns-roam-api :url ,sns-roam-vc-url :lisp-dir "lisp"))))
+    (autoload 'sns-roam-meeting-note "sns-roam-api" nil t))
 #+end_src
 
 
